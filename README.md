@@ -8,25 +8,3 @@ VMware Workstation.
 sh tools/vmware.sh run
 sh tools/vmware.sh test
 ```
-
-`run` builds, boots, and attaches to the Obsidian shell; Ctrl+] disconnects
-and stops the VM. The VMware window shows the graphical login; click inside it
-to capture the mouse and keyboard, and Ctrl+Alt releases them. After login,
-the desktop's top bar opens Notes, locks the screen, or logs out (Ctrl+Shift+L and
-Ctrl+Shift+Q also work while the desktop has focus); logging out closes the session's apps.
-An administrator's `display WIDTHxHEIGHT` switches the screen mode live and keeps it across boots. `test` runs the host tests, then the kernel, service, and
-shell acceptance checks. Both accept `--media disk`, `--cpus N`, and
-`--memory MB`.
-
-Each VM gets a second SATA disk holding the GraniteOS volume. `run` keeps it
-between sessions (`zig-out/vm/run-<media>/data.img`); `test` starts it blank
-and checks that files survive a power cycle.
-
-A blank volume has no accounts: the shell runs setup as `nobody`, and
-`useradd NAME` creates the first administrator. From then on the shell asks
-for a login. `install` (administrators, or anyone during setup) copies
-GraniteOS onto the first GPT disk with a FAT32 EFI system partition and at
-least 64 MiB of unpartitioned space, adds a GraniteOS partition there, and
-puts a GraniteOS entry first in the firmware boot order; existing partitions
-are never moved or resized. `test` also installs onto a disk holding a
-stand-in OS and boots it without the live media.
