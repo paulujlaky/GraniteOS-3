@@ -96,7 +96,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     shell = api.launch("shell", if (home.len != 0) home else "/") catch {
 
         feed("Could not start the shell.\n");
-        while (true) if (window.next(500)) |event| if (event.kind == .close) api.exit(0);
+        while (true) if (window.next(500)) |event| if (event.kind == .close) window.quit();
 
     };
 
@@ -104,7 +104,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         if (window.next(if (waiting != null or queued != 0) 1 else 5)) |event| {
 
-            if (event.kind == .close) api.exit(0);
+            if (event.kind == .close) window.quit();
             react(event);
 
         }

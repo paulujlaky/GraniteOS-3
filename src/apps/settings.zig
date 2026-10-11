@@ -286,7 +286,7 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
 
         const event = window.next(500) orelse continue;
 
-        if (event.kind == .close) api.exit(0);
+        if (event.kind == .close) window.quit();
 
     }
 

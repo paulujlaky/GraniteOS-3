@@ -340,6 +340,12 @@ var reserved = [2]i32{ 0, 0 };
 /// The window list changed since the session last heard.
 var changed = false;
 
+/// The part of the screen to redraw before waiting for the next request.
+var stale: gui.Rect = .{};
+
+/// The rounded window corners a redraw lays over the GPU's frame.
+var patches: [2 * surfaces.len]gui.Rect = undefined;
+
 var clipboard: [64 * 1024]u8 = undefined;
 var copied: usize = 0;
 
@@ -388,6 +394,9 @@ pub export fn app_main(_: usize, base: usize, environment: *const api.abi.Enviro
     compose(back.bounds());
 
     while (true) {
+
+        // Everything the last request changed draws once, after its answer let the client carry on.
+        redraw();
 
         const request = api.receive(true) catch continue;
 
@@ -961,10 +970,19 @@ fn paste(request: api.Request, value: u64) u64 {
 
 }
 
-/// Redraws `area` of the screen from the surface stack, bottom to top, on the GPU when there is one.
+/// Marks `area` of the screen for redrawing once the current request is answered, so a burst of changes draws once.
 fn compose(area: gui.Rect) void {
 
-    const visible = area.intersect(back.bounds()) orelse return;
+    stale = stale.join(area);
+
+}
+
+/// Redraws what `compose` marked, from the surface stack, bottom to top, on the GPU when there is one.
+fn redraw() void {
+
+    const visible = stale.intersect(back.bounds()) orelse return;
+
+    stale = .{};
 
     if (renderer) |*device| {
 
@@ -985,6 +1003,8 @@ fn compose(area: gui.Rect) void {
         }
 
         // The GPU cannot cut to a curve, so the CPU redraws the few pixels at windows' rounded corners and lays them over.
+        var count: usize = 0;
+
         for (stack[0..depth]) |index| {
 
             const surface = &surfaces[index];
@@ -999,14 +1019,15 @@ fn compose(area: gui.Rect) void {
 
             for (corners.squares()) |square| {
 
-                const patch = square.intersect(visible) orelse continue;
-
-                paint(patch);
-                device.patch(&back, patch);
+                patches[count] = square.intersect(visible) orelse continue;
+                paint(patches[count]);
+                count += 1;
 
             }
 
         }
+
+        device.patch(&back, patches[0..count]);
 
         return device.finish(visible);
 
@@ -1756,7 +1777,7 @@ fn drop(id: u64) void {
 /// Drops the surfaces and images of clients that exited.
 fn prune() void {
 
-    sweep = api.ticks() + 100;
+    sweep = api.ticks() + 25;
 
     for (&clients) |*owner| {
 

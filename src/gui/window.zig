@@ -230,6 +230,14 @@ pub const Window = struct {
 
     }
 
+    /// Takes the window off the screen at once, rather than when the display next notices the exit, and exits.
+    pub fn quit(self: *Window) noreturn {
+
+        self.surface.hide();
+        api.exit(0);
+
+    }
+
     pub fn show(self: *Window) void {
 
         if (!self.surface.hidden) return;

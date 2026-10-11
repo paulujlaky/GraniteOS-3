@@ -134,7 +134,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         };
 
-        if (event.kind == .close) api.exit(0);
+        if (event.kind == .close) window.quit();
         react(event);
         update();
 

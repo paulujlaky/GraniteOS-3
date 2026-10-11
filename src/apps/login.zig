@@ -105,11 +105,23 @@ var date = gui.label("", .{
     .text_align = .center,
 
 });
-var greeting = gui.label("Welcome to GraniteOS. Create the administrator account to begin.", theme.caption.with(.{
+// Labels keep to one line, so the greeting takes two to fit the form.
+var welcome = gui.label("Welcome to GraniteOS.", theme.caption.with(.{
 
     .text_align = .center,
 
 }));
+var instruction = gui.label("Create the administrator account to begin.", theme.caption.with(.{
+
+    .text_align = .center,
+
+}));
+var greeting_parts = [_]*gui.Node{ &welcome, &instruction };
+var greeting = gui.box(.{
+
+    .gap = 2,
+
+}, &greeting_parts);
 var users = gui.box(.{
 
     .gap = 4,

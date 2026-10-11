@@ -6,6 +6,7 @@ const api = @import("api");
 const gui = @import("gui");
 
 // SVGA3D commands, numbered as in VMware's svga3d_cmd.h; "memory objects" are its MOBs.
+const surface_copy = 1042;
 const set_z_range = 1048;
 const set_render_state = 1049;
 const set_render_target = 1050;
@@ -125,8 +126,11 @@ const result = 3;
 const code = 4;
 const state = 5;
 
+/// Where quads land; finished areas are copied to `frame`, so the host never shows one half drawn.
+const canvas = 6;
+
 /// Clients' images, each a texture of its own, follow the fixed objects.
-const pictures = 6;
+const pictures = 7;
 pub const textures = 48;
 const objects = pictures + textures;
 
@@ -271,6 +275,7 @@ pub const Gpu = struct {
         // The device may write context state and rendered frames back at any time, so those pages outlive us.
         _ = try gpu.reserve(state, state_pages);
         _ = try gpu.reserve(frame, (width * height * 4 + 4095) / 4096);
+        _ = try gpu.reserve(canvas, (width * height * 4 + 4095) / 4096);
         gpu.readback = try gpu.reserve(result, 1);
 
         const program = try gpu.reserve(code, 1);
@@ -282,6 +287,7 @@ pub const Gpu = struct {
         @memcpy(program.bytes[256..][0..@sizeOf(@TypeOf(tint))], std.mem.asBytes(&tint));
 
         gpu.surface(frame, texture_hint | target_hint | scanout, x8r8g8b8, width, height);
+        gpu.surface(canvas, texture_hint | target_hint, x8r8g8b8, width, height);
         gpu.surface(vertices, vertex_hint, buffer, vertex_pages * 4096, 1);
         gpu.surface(atlas, texture_hint, a8r8g8b8, atlas_size, atlas_size);
         gpu.surface(result, target_hint, x8r8g8b8, 4, 4);
@@ -352,7 +358,7 @@ pub const Gpu = struct {
 
         if (!settled) return null;
 
-        device.submit(set_render_target, &.{ context, color0, frame, 0, 0 });
+        device.submit(set_render_target, &.{ context, color0, canvas, 0, 0 });
         device.submit(set_viewport, &.{ context, 0, 0, width, height });
 
         device.retire();
@@ -454,59 +460,95 @@ pub const Gpu = struct {
 
     }
 
-    /// Draws what was queued and shows `area` of the frame.
+    /// Draws what was queued, then copies `area` to the frame and shows it.
     pub fn finish(self: *Gpu, area: gui.Rect) void {
 
+        const x: u32 = @intCast(area.x);
+        const y: u32 = @intCast(area.y);
+
         self.flush();
-        self.device.submit(update_target, &.{ 0, @intCast(area.x), @intCast(area.y), @intCast(area.width), @intCast(area.height) });
+
+        // Source then destination as surface, face, and mipmap, then one box: x, y, z, width, height, depth, and where it starts in the source.
+        self.device.submit(surface_copy, &.{ canvas, 0, 0, frame, 0, 0, x, y, 0, @intCast(area.width), @intCast(area.height), 1, x, y, 0 });
+        self.device.submit(update_target, &.{ 0, x, y, @intCast(area.width), @intCast(area.height) });
 
     }
 
-    /// Lays `area` of `source`, a frame drawn on the CPU, over everything drawn so far; at most `largest_corner` square.
-    pub fn patch(self: *Gpu, source: *const gui.Canvas, area: gui.Rect) void {
+    /// Lays `areas` of `source`, a frame drawn on the CPU, over everything drawn so far; each at most `largest_corner` square.
+    pub fn patch(self: *Gpu, source: *const gui.Canvas, areas: []const gui.Rect) void {
 
-        const reserved = cached(pack(.patch, 0, 0, 0)) orelse self.insert(pack(.patch, 0, 0, 0), largest_corner, largest_corner) orelse return;
-        const width: u32 = @intCast(@min(area.width, largest_corner));
-        const height: u32 = @intCast(@min(area.height, largest_corner));
+        if (areas.len == 0) return;
+
+        const key = pack(.patch, 0, 0, 0);
+        const reserved = cached(key) orelse self.insert(key, largest_corner, largest_corner) orelse return;
         const texels = std.mem.bytesAsSlice(u32, self.atlas.bytes);
+        var at = gui.Point{};
+        var shelf: i32 = 0;
 
-        // Staged quads may sample the last patch, and the device may still be reading it.
+        // Patches share one atlas square, laid out in rows; staged quads and the device may still read the last ones.
         self.flush();
         self.device.idle();
         self.busy = false;
 
-        for (0..height) |y| {
+        for (areas) |area| {
 
-            for (0..width) |x| texels[(reserved.y + y) * atlas_size + reserved.x + x] = 0xff000000 | source.pixels[(@as(usize, @intCast(area.y)) + y) * source.width + @as(usize, @intCast(area.x)) + x];
+            const shown = gui.Rect{
+
+                .x = area.x,
+                .y = area.y,
+                .width = @min(area.width, largest_corner),
+                .height = @min(area.height, largest_corner),
+
+            };
+
+            if (at.x + shown.width > largest_corner) at = .{
+
+                .y = at.y + shelf,
+
+            };
+
+            if (at.y + shown.height > largest_corner) {
+
+                self.flush();
+                self.device.idle();
+                self.busy = false;
+                at = .{};
+
+            }
+
+            if (at.x == 0) shelf = 0;
+
+            const slot = Slot{
+
+                .x = reserved.x + @as(u32, @intCast(at.x)),
+                .y = reserved.y + @as(u32, @intCast(at.y)),
+                .width = @intCast(shown.width),
+                .height = @intCast(shown.height),
+
+            };
+
+            for (0..slot.height) |y| {
+
+                const row = source.pixels[(@as(usize, @intCast(area.y)) + y) * source.width + @as(usize, @intCast(area.x)) ..];
+
+                for (0..slot.width) |x| texels[(slot.y + y) * atlas_size + slot.x + x] = 0xff000000 | row[x];
+
+            }
+
+            self.dirty = self.dirty.join(.{
+
+                .x = @intCast(slot.x),
+                .y = @intCast(slot.y),
+                .width = shown.width,
+                .height = shown.height,
+
+            });
+            self.quad(shown, slot, false, false, 0xffffff, shown);
+            at.x += shown.width;
+            shelf = @max(shelf, shown.height);
 
         }
 
-        const slot = Slot{
-
-            .x = reserved.x,
-            .y = reserved.y,
-            .width = width,
-            .height = height,
-
-        };
-        const shown = gui.Rect{
-
-            .x = area.x,
-            .y = area.y,
-            .width = @intCast(width),
-            .height = @intCast(height),
-
-        };
-
-        self.dirty = self.dirty.join(.{
-
-            .x = @intCast(slot.x),
-            .y = @intCast(slot.y),
-            .width = shown.width,
-            .height = shown.height,
-
-        });
-        self.quad(shown, slot, false, false, 0xffffff, shown);
         self.flush();
 
     }
