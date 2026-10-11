@@ -43,7 +43,7 @@ fn handle(message: api.Request) u64 {
 
         .hello => return protocol.version,
         .crash => return if (message.first == api.raw(.owner, 0, 0, 0).first) fault() else protocol.invalid,
-        .list, .read, .write, .create, .directory, .remove, .volume, .change => {
+        .list, .read, .write, .create, .directory, .remove, .volume, .change, .rename => {
 
         },
         else => return protocol.invalid,
@@ -84,6 +84,15 @@ fn serve(message: api.Request, operation: protocol.Operation, value: u56, name: 
         .create => try mounted.create(name, .file),
         .directory => try mounted.create(name, .directory),
         .remove => try mounted.remove(name),
+        .rename => {
+
+            // The new path follows the old one, NUL-terminated too.
+            const rest = path[name.len + 1 .. @min(name.len + 1 + payload, path.len)];
+            const end = std.mem.indexOfScalar(u8, rest, 0) orelse return error.Invalid;
+
+            try mounted.rename(name, rest[0..end]);
+
+        },
         .change => {
 
             const owner: u32 = @truncate(value >> 16);

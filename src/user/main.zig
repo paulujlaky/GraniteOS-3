@@ -165,7 +165,8 @@ pub export fn app_main(role: usize, peer: usize, environment: *const abi.Environ
         },
         8 => {
 
-            _ = @as(*volatile u8, @ptrFromInt(0xffffffb000 - 4096)).*;
+            // Below the stack and the environment page beneath it.
+            _ = @as(*volatile u8, @ptrFromInt(0xffffff0000 - 4096)).*;
             finish(92);
 
         },

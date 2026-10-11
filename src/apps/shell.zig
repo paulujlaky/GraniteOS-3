@@ -76,9 +76,11 @@ const groups = [_]Group{
         .commands = &.{
 
             command("id", "Print this process' identity", id),
+            command("date", "Print the local date and time", date),
             command("uptime", "Time since boot", uptime),
             command("permissions", "List this process' permissions", permissions),
             command("services", "List running services", services),
+            command("ps", "List processes with their memory and processor use", ps),
             command("display [WIDTHxHEIGHT]", "Show or set the screen mode (administrators)", display),
             command("install", "Install GraniteOS beside the existing OS", install),
             command("reboot", "Restart the machine", reboot),
@@ -146,7 +148,7 @@ var owner_length: usize = 0;
 
 var served: u64 = 0;
 
-pub export fn app_main(_: usize, supervisor: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
+pub export fn app_main(parent: usize, supervisor: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
 
     api.start(environment, .application);
     terminal = .{
@@ -154,6 +156,19 @@ pub export fn app_main(_: usize, supervisor: usize, environment: *const api.abi.
         .supervisor = supervisor,
 
     };
+
+    // A graphical terminal launches us into its session with the home folder as our argument; the supervisor starts the serial shell with none.
+    var home_bytes: [256]u8 = undefined;
+    const home = api.argument(&home_bytes);
+
+    if (home.len != 0) {
+
+        terminal.host = parent;
+        adopt(home);
+        session();
+        api.exit(0);
+
+    }
 
     while (true) {
 
@@ -198,6 +213,19 @@ fn serve() void {
     api.reply(request, result) catch {
 
     };
+
+}
+
+/// Takes on the desktop session we were launched into: its user already signed in, starting in `home`.
+fn adopt(home: []const u8) void {
+
+    const name = std.fs.path.basename(home);
+
+    user_length = @min(name.len, user.len);
+    @memcpy(user[0..user_length], name[0..user_length]);
+    cwd_length = @min(home.len, cwd.len);
+    @memcpy(cwd[0..cwd_length], home[0..cwd_length]);
+    say("OBSIDIAN on GraniteOS 3. Type 'help' for available commands.\n\n", .{});
 
 }
 
@@ -331,8 +359,12 @@ fn next() u8 {
     while (true) {
 
         serve();
-        if (terminal.read() catch null) |byte| return byte;
-        api.sleep(1);
+
+        // A graphical terminal holds our read until a key arrives; once its window closes, we go too.
+        const byte = terminal.read() catch |err| if (terminal.host != 0 and err == error.Missing) api.exit(0) else null;
+
+        if (byte) |value| return value;
+        if (terminal.host == 0) api.sleep(1);
 
     }
 
@@ -625,6 +657,7 @@ fn choose(out: []u8) ?[]const u8 {
 fn lock(_: []const u8) Error!void {
 
     if (user_length == 0) return terminal.write("lock: nobody is logged in\n");
+    if (terminal.host != 0) return terminal.write("lock: lock the desktop with Super+L\n");
 
     show("\x1b[2J\x1b[H");
 
@@ -646,7 +679,8 @@ fn lock(_: []const u8) Error!void {
 
 fn logout(_: []const u8) Error!void {
 
-    if (user_length != 0) accounts.logout() catch |err| return report("logout", err);
+    // In a graphical terminal this only ends the shell; the desktop session goes on.
+    if (user_length != 0 and terminal.host == 0) accounts.logout() catch |err| return report("logout", err);
     active = false;
 
 }
@@ -654,6 +688,14 @@ fn logout(_: []const u8) Error!void {
 fn id(_: []const u8) Error!void {
 
     try terminal.print("{d}\n", .{api.identity()});
+
+}
+
+fn date(_: []const u8) Error!void {
+
+    const now = api.Date.init(api.clock());
+
+    try terminal.print("{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}\n", .{ now.year, now.month, now.day, now.hour, now.minute, now.second });
 
 }
 
@@ -684,6 +726,37 @@ fn services(_: []const u8) Error!void {
         try terminal.print("  {s:<10}{d}\n", .{ @tagName(image), peer });
 
     }
+
+}
+
+fn ps(_: []const u8) Error!void {
+
+    var records: [64]api.abi.Usage = undefined;
+    const summary = api.stats(&records) catch |err| return report("ps", err);
+    const listed = records[0..summary.records];
+
+    // Block sort would want a 32 KiB cache on this 16 KiB stack.
+    std.sort.insertion(api.abi.Usage, listed, {}, earlier);
+    try terminal.write("  ID    IMAGE     USER      STATE          MEMORY         CPU\n");
+
+    for (listed) |record| {
+
+        const image = if (std.enums.fromInt(api.abi.Image, record.image)) |known| @tagName(known) else "-";
+
+        try terminal.print("  {d:<6}{s:<10}{s:<10}{s:<10}{d:>7} KiB{d:>7}.{d:0>2} s\n", .{ record.id, image, owner(record.identity.user), @tagName(record.state), record.pages * 4, record.ticks / 100, record.ticks % 100 });
+
+    }
+
+    const used = (summary.pages - summary.free) * 4;
+    const busy = summary.busy * 100 / @max(summary.busy + summary.idle, 1);
+
+    try terminal.print("{d} processes; {d} of {d} KiB memory in use; {d} processors {d}% busy since boot\n", .{ summary.processes, used, summary.pages * 4, summary.processors, busy });
+
+}
+
+fn earlier(_: void, left: api.abi.Usage, right: api.abi.Usage) bool {
+
+    return left.id < right.id;
 
 }
 
@@ -816,10 +889,11 @@ fn ls(argument: []const u8) Error!void {
 
 }
 
-// Names the account owning a file, remembering the last answer since listings repeat owners.
+// Names the account owning a file or process, remembering the last answer since listings repeat owners.
 fn owner(user_id: u32) []const u8 {
 
     if (user_id == 0) return "system";
+    if (user_id == api.abi.nobody.user) return "nobody";
     if (owner_length != 0 and owner_id == user_id) return owner_name[0..owner_length];
 
     var index: u56 = 0;

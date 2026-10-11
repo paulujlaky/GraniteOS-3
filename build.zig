@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const abi = @import("src/kernel/abi.zig");
+
 pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{
@@ -110,23 +112,13 @@ pub fn build(b: *std.Build) void {
     });
     gui.addImport("api", api);
 
-    const apps = [_][]const u8{
+    const images = std.enums.values(abi.Image);
 
-        "shell", "client", "login", "notes",
+    // The supervisor comes first; the kernel starts it rather than embedding it as an image.
+    for (0..images.len + 1) |index| {
 
-    };
-
-    for ([_][]const u8{
-
-        "supervisor", "serial", "helper", "storage", "files", "accounts", "install", "display", "input",
-
-    } ++ apps) |name| {
-
-        const app = for (apps) |entry| {
-
-            if (std.mem.eql(u8, entry, name)) break true;
-
-        } else false;
+        const name = if (index == 0) "supervisor" else @tagName(images[index - 1]);
+        const app = index != 0 and images[index - 1].application();
 
         const program = b.addExecutable(.{
 
@@ -198,7 +190,6 @@ pub fn build(b: *std.Build) void {
         }),
 
     });
-
     b.step("test", "Test boot contracts and kernel policies").dependOn(&b.addRunArtifact(tests).step);
 
 }

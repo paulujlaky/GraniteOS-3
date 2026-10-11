@@ -1,6 +1,7 @@
 #!/bin/sh
 
-# Build GraniteOS and boot it in VMware: `run` attaches the COM2 terminal, `test` runs every acceptance check.
+# Build GraniteOS and boot it in VMware: `run` attaches the COM2 terminal, `show` boots the desktop headless for
+# tools/screen.py (VNC port 5901) until interrupted, and `test` runs every acceptance check.
 
 set -eu
 
@@ -11,11 +12,12 @@ fail() {
 
 }
 
-usage='Usage: sh tools/vmware.sh run|test [--media iso|disk] [--cpus N] [--memory MB]'
+usage='Usage: sh tools/vmware.sh run|show|test [--media iso|disk] [--cpus N] [--memory MB]'
 [ "$#" -ge 1 ] || fail "$usage"
 
 action=$1
 media=iso
+vnc=$([ "$action" = test ] && echo 5902 || echo 5901)
 cpus=2
 memory=256
 shift
@@ -36,7 +38,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 case $action-$media in
-    run-iso|run-disk|test-iso|test-disk) ;;
+    run-iso|run-disk|show-iso|show-disk|test-iso|test-disk) ;;
     *) fail "$usage" ;;
 esac
 
@@ -173,6 +175,8 @@ serial1.pipe.endPoint = "server"
 serial1.tryNoRxLoss = "TRUE"
 serial1.yieldOnMsrRead = "TRUE"
 serial1.startConnected = "TRUE"
+RemoteDisplay.vnc.enabled = "TRUE"
+RemoteDisplay.vnc.port = "$vnc"
 floppy0.present = "FALSE"
 ethernet0.present = "FALSE"
 usb.present = "FALSE"
@@ -188,8 +192,8 @@ EOF
 
 prepare "$action-$media"
 
-# `run` keeps its data disk between sessions; `test` always starts blank.
-[ "$action" = run ] && [ -f "$directory/data.img" ] || cp zig-out/data.img "$directory/data.img"
+# `run` and `show` keep their data disk between sessions; `test` always starts blank.
+[ "$action" != test ] && [ -f "$directory/data.img" ] || cp zig-out/data.img "$directory/data.img"
 descriptor data
 live
 start
@@ -201,6 +205,13 @@ if [ "$action" = run ]; then
     printf 'Kernel log (COM1): %s\n' "$serial"
     "$python" tools/terminal.py attach "$pipe"
     exit
+
+fi
+
+if [ "$action" = show ]; then
+
+    printf 'Desktop on VNC port %s; kernel log (COM1): %s\n' "$vnc" "$serial"
+    while :; do sleep 1; done
 
 fi
 

@@ -42,16 +42,118 @@ const Shape = struct {
     contours: usize = 0,
 
 };
-var embedded: ?Font = null;
+/// The embedded typefaces; every one is known to parse.
+pub const Face = enum(u8) {
 
-/// Nimbus Sans, a metric-compatible Helvetica; the embedded file is known to parse.
-pub fn sans() *const Font {
+    /// Nimbus Sans, a metric-compatible Helvetica.
+    sans,
 
-    if (embedded == null) embedded = Font.init(@embedFile("fonts/NimbusSans-Regular.ttf")) catch unreachable;
+    /// JetBrains Mono, subset to Latin, punctuation, arrows, and box drawing.
+    mono,
 
-    return &embedded.?;
+    /// Lucide's line icons, subset to those `Icon` names.
+    icons,
+
+};
+
+const files = [_][]const u8{
+
+    @embedFile("fonts/NimbusSans-Regular.ttf"),
+    @embedFile("fonts/JetBrainsMono-Regular.ttf"),
+    @embedFile("fonts/Lucide.ttf"),
+
+};
+
+var embedded = [_]?Font{null} ** files.len;
+
+pub fn face(which: Face) *const Font {
+
+    const slot = &embedded[@intFromEnum(which)];
+
+    if (slot.* == null) slot.* = Font.init(files[@intFromEnum(which)]) catch unreachable;
+
+    return &slot.*.?;
 
 }
+
+pub fn sans() *const Font {
+
+    return face(.sans);
+
+}
+
+/// Lucide icons by name, as their code points in the subset font; adding one means re-subsetting `Lucide.ttf` with it.
+pub const Icon = enum(u21) {
+
+    activity = 0xe038,
+    app = 0xe426,
+    back = 0xe048,
+    calendar = 0xe063,
+    check = 0xe06c,
+    close = 0xe1b2,
+    clock = 0xe087,
+    code = 0xe0c3,
+    copy = 0xe09e,
+    cpu = 0xe0a9,
+    cut = 0xe14e,
+    disk = 0xe0ed,
+    down = 0xe06d,
+    edit = 0xe172,
+    file = 0xe0c0,
+    folder = 0xe0d7,
+    folder_add = 0xe0d9,
+    folder_open = 0xe247,
+    forward = 0xe049,
+    grid = 0xe0ff,
+    home = 0xe0f5,
+    image = 0xe0f6,
+    info = 0xe0f9,
+    key = 0xe4a3,
+    left = 0xe06e,
+    lock = 0xe10b,
+    logout = 0xe10e,
+    maximize = 0xe167,
+    memory = 0xe445,
+    minimize = 0xe11c,
+    monitor = 0xe11d,
+    more = 0xe0b6,
+    new = 0xe0c9,
+    palette = 0xe1dd,
+    paste = 0xe3e8,
+    pencil = 0xe1f9,
+    plus = 0xe13d,
+    power = 0xe140,
+    refresh = 0xe145,
+    restart = 0xe148,
+    right = 0xe06f,
+    save = 0xe14d,
+    search = 0xe151,
+    settings = 0xe154,
+    terminal = 0xe181,
+    document = 0xe0cc,
+    trash = 0xe18e,
+    up = 0xe04a,
+    user = 0xe19f,
+    users = 0xe1a4,
+    user_add = 0xe1a2,
+    wallpaper = 0xe44b,
+    warning = 0xe077,
+    zoom_in = 0xe1b6,
+    zoom_out = 0xe1b7,
+    zoom_fit = 0xe257,
+
+    /// The icon as UTF-8, ready to draw with the `icons` face.
+    pub fn text(self: Icon) []const u8 {
+
+        return switch (self) {
+
+            inline else => |which| &comptime std.unicode.utf8EncodeComptime(@intFromEnum(which)),
+
+        };
+
+    }
+
+};
 
 /// A TrueType font with glyph outlines; parses tables in place without allocating.
 pub const Font = struct {
@@ -62,6 +164,9 @@ pub const Font = struct {
     metrics: u16,
     ascent: i16,
     descent: i16,
+
+    /// How far capitals rise above the baseline; the whole line for fonts without letters, such as icons.
+    capital: i16 = 0,
 
     cmap: usize,
     loca: usize,
@@ -94,6 +199,14 @@ pub const Font = struct {
             .hmtx = table(bytes, "hmtx") orelse return error.UnsupportedFont,
 
         };
+
+        // Version 2 and later of the OS/2 table give the height of capitals.
+        if (table(bytes, "OS/2")) |metrics| if (metrics + 90 <= bytes.len and read(u16, bytes, metrics) >= 2) {
+
+            font.capital = read(i16, bytes, metrics + 88);
+
+        };
+        if (font.capital <= 0) font.capital = font.ascent + font.descent;
 
         for (0..read(u16, bytes, cmap + 2)) |index| {
 

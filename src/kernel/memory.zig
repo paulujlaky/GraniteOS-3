@@ -13,6 +13,9 @@ pub const Frames = struct {
     free_count: usize = 0,
     cursor: usize = 0,
 
+    /// Pages the allocator manages, free or not.
+    total: usize = 0,
+
     pub fn storageSize(regions: []const boot.Region) MemoryError!usize {
 
         var end: u64 = 0;
@@ -71,6 +74,8 @@ pub const Frames = struct {
             }
 
         }
+
+        self.total = self.free_count;
 
         return self;
 

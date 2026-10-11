@@ -144,6 +144,8 @@ def smoke(command, require):
     require(re.findall(r"\r\n(\d+)\r\n", command(b"id\r")) == identity, "shell survived restart")
     require(re.search(r"serial +\d+", command(b"services\r")), "discovery")
     require(re.search(r"storage +\d+", command(b"services\r")), "storage service")
+    require(re.search(r"\r\n\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\r\n", command(b"date\r")), "wall clock")
+    require(re.search(r"\r\n +\d+ +(display|files) +system +", command(b"ps\r")), "process listing")
     require("permission denied" in command(b"mkdir /docs\r"), "the root directory belongs to the system")
     require("already exists" not in command(b"mkdir docs\r"), "mkdir")
     require("already exists" in command(b"mkdir docs\r"), "duplicate directory")

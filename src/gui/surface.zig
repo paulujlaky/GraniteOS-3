@@ -1,5 +1,6 @@
 const canvas = @import("canvas.zig");
 const draw = @import("draw.zig");
+const image = @import("image.zig");
 
 const api = @import("api");
 
@@ -12,20 +13,22 @@ pub const Surface = struct {
     memory: api.Shared,
     half: u1 = 0,
 
-    display: api.Display = .{},
     id: u64 = 0,
     attached: bool = false,
 
-    /// Allocates the command buffer for `spec`; nothing shows until the first `present`.
-    pub fn open(spec: api.display.Spec) !Surface {
+    /// Taken off the screen until the next `present` after `hidden` clears.
+    hidden: bool = false,
 
-        const memory = try api.share(2 * draw.capacity / 4096);
+    /// Allocates `capacity` bytes for each half of the command buffer; nothing shows until the first `present`.
+    pub fn open(spec: api.display.Spec, capacity: usize) !Surface {
+
+        const memory = try api.share(2 * capacity / 4096);
 
         return .{
 
             .list = .{
 
-                .bytes = memory.bytes[0..draw.capacity],
+                .bytes = memory.bytes[0..capacity],
                 .width = spec.area.width,
                 .height = spec.area.height,
 
@@ -40,25 +43,32 @@ pub const Surface = struct {
     /// Shows what the list recorded, then starts a fresh list in the other half.
     pub fn present(self: *Surface) !void {
 
+        if (self.hidden) return;
+
+        const half = self.memory.bytes.len / 2;
+
         for (0..2) |_| {
 
             if (!self.attached) {
 
-                self.id = try self.display.surface(self.memory.handle, self.spec);
+                self.id = try image.display.surface(self.memory.handle, self.spec);
                 self.attached = true;
+
+                // A restarted display forgot our images along with our surfaces.
+                image.republish();
 
             }
 
-            self.display.present(self.id, self.half, self.list.length) catch |err| {
+            image.display.present(self.id, self.half, self.list.length) catch |err| {
 
-                if (err != error.Missing and err != error.Denied) return err;
+                if (err != error.Missing and err != error.Denied and err != error.Invalid) return err;
                 self.attached = false;
                 continue;
 
             };
 
             self.half +%= 1;
-            self.list.bytes = self.memory.bytes[@as(usize, self.half) * draw.capacity ..][0..draw.capacity];
+            self.list.bytes = self.memory.bytes[@as(usize, self.half) * half ..][0..half];
             self.list.reset();
 
             return;
@@ -72,12 +82,10 @@ pub const Surface = struct {
     /// Moves, resizes, restacks, or retitles the surface.
     pub fn place(self: *Surface, spec: api.display.Spec) !void {
 
-        self.spec = spec;
-        self.list.width = spec.area.width;
-        self.list.height = spec.area.height;
+        self.resized(spec);
         if (!self.attached) return;
 
-        self.display.place(self.id, spec) catch |err| {
+        image.display.place(self.id, spec) catch |err| {
 
             if (err != error.Missing and err != error.Denied) return err;
             self.attached = false;
@@ -86,29 +94,37 @@ pub const Surface = struct {
 
     }
 
-    /// Waits up to `timeout` ticks for input; null when none arrived.
-    pub fn next(self: *Surface, timeout: u64) !?api.Event {
+    /// Takes in a placement the display already made.
+    pub fn resized(self: *Surface, spec: api.display.Spec) void {
 
-        if (!self.attached) return error.Missing;
+        self.spec = spec;
+        self.list.width = spec.area.width;
+        self.list.height = spec.area.height;
 
-        return self.display.wait(self.id, timeout) catch |err| {
+    }
 
-            if (err != error.Missing and err != error.Denied) return err;
-            self.attached = false;
+    /// Takes the surface off the screen; the next `present` after clearing `hidden` brings it back.
+    pub fn hide(self: *Surface) void {
 
-            return null;
+        self.hidden = true;
+        if (!self.attached) return;
+
+        image.display.place(self.id, removal) catch {
 
         };
+        self.attached = false;
 
     }
 
 };
 
+/// A placement the display reads as a request to drop the surface.
+const removal = api.display.Spec{};
+
 /// The screen's size, from the display service.
 pub fn screen() !canvas.Rect {
 
-    var display = api.Display{};
-    const size = try display.size();
+    const size = try image.display.size();
 
     return .{
 

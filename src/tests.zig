@@ -3,6 +3,8 @@ const std = @import("std");
 const boot = @import("boot/info.zig");
 const map = @import("boot/uefi/map.zig");
 const graphics = @import("boot/uefi/graphics.zig");
+const clock = @import("boot/uefi/clock.zig");
+const time = @import("api/time.zig");
 
 comptime {
 
@@ -218,5 +220,60 @@ test "framebuffer rejects short storage bad stride and overlapping channels" {
     framebuffer.red_mask = framebuffer.green_mask;
 
     try std.testing.expect(!graphics.valid(framebuffer));
+
+}
+
+fn moment(date: time.Date) uefi.Time {
+
+    var value = std.mem.zeroes(uefi.Time);
+
+    value.year = date.year;
+    value.month = date.month;
+    value.day = date.day;
+    value.hour = date.hour;
+    value.minute = date.minute;
+    value.second = date.second;
+
+    return value;
+
+}
+
+test "firmware clock and calendar dates agree across leap years and reject impossible dates" {
+
+    const dates = [_]struct { u64, time.Date }{
+
+        .{ 0, .{ .year = 1970, .month = 1, .day = 1, .hour = 0, .minute = 0, .second = 0, .weekday = 4 } },
+        .{ 946684799, .{ .year = 1999, .month = 12, .day = 31, .hour = 23, .minute = 59, .second = 59, .weekday = 5 } },
+        .{ 951827696, .{ .year = 2000, .month = 2, .day = 29, .hour = 12, .minute = 34, .second = 56, .weekday = 2 } },
+        .{ 1709251199, .{ .year = 2024, .month = 2, .day = 29, .hour = 23, .minute = 59, .second = 59, .weekday = 4 } },
+        .{ 1791640987, .{ .year = 2026, .month = 10, .day = 10, .hour = 14, .minute = 3, .second = 7, .weekday = 6 } },
+        .{ 4107542400, .{ .year = 2100, .month = 3, .day = 1, .hour = 0, .minute = 0, .second = 0, .weekday = 1 } },
+
+    };
+
+    for (dates) |entry| {
+
+        const seconds, const date = entry;
+
+        try std.testing.expectEqual(date, time.Date.init(seconds));
+        try std.testing.expectEqual(seconds, clock.seconds(moment(date)).?);
+
+    }
+
+    // 2100 is no leap year, and the firmware's fields may be garbage.
+    var invalid = moment(dates[5][1]);
+
+    invalid.month = 2;
+    invalid.day = 29;
+    try std.testing.expectEqual(null, clock.seconds(invalid));
+    invalid.month = 13;
+    invalid.day = 1;
+    try std.testing.expectEqual(null, clock.seconds(invalid));
+    invalid.month = 12;
+    invalid.year = 1969;
+    try std.testing.expectEqual(null, clock.seconds(invalid));
+    invalid.year = 2026;
+    invalid.hour = 24;
+    try std.testing.expectEqual(null, clock.seconds(invalid));
 
 }

@@ -54,6 +54,71 @@ pub const Files = struct {
 
     }
 
+    /// Moves or renames `from` to `to`, which must not exist yet.
+    pub fn rename(self: *Files, from: []const u8, to: []const u8) FileError!void {
+
+        if (from.len + to.len + 2 > self.window.len or std.mem.indexOfScalar(u8, to, 0) != null) return error.Invalid;
+
+        @memcpy(self.window[from.len + 1 ..][0..to.len], to);
+        self.window[from.len + 1 + to.len] = 0;
+        _ = try self.request(.rename, 0, from, to.len + 1);
+
+    }
+
+    /// Reads all of file `path` into memory the caller frees with `allocator`.
+    pub fn load(self: *Files, allocator: std.mem.Allocator, path: []const u8) FileError![]u8 {
+
+        // Big reads lend the destination itself, so each call moves up to a quarter mebibyte.
+        const chunk = 256 * 1024;
+        var data: std.ArrayList(u8) = .empty;
+
+        errdefer data.deinit(allocator);
+
+        while (true) {
+
+            data.ensureUnusedCapacity(allocator, chunk + path.len + 1) catch return error.Exhausted;
+
+            const window = data.unusedCapacitySlice()[0 .. chunk + path.len + 1];
+
+            @memcpy(window[0..path.len], path);
+            window[path.len] = 0;
+
+            const count = try api.query(&self.endpoint, .files, protocol.pack(.read, @intCast(data.items.len)), window);
+
+            if (count == 0) break;
+            data.items.len += count;
+
+        }
+
+        return data.toOwnedSlice(allocator) catch error.Exhausted;
+
+    }
+
+    /// Replaces file `path` with `bytes`, creating it if needed.
+    pub fn save(self: *Files, allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) FileError!void {
+
+        const chunk = 256 * 1024;
+        const window = allocator.alloc(u8, path.len + 1 + @min(bytes.len, chunk)) catch return error.Exhausted;
+        var done: usize = 0;
+
+        defer allocator.free(window);
+
+        try self.create(path);
+        @memcpy(window[0..path.len], path);
+        window[path.len] = 0;
+
+        while (done < bytes.len) {
+
+            const count = @min(bytes.len - done, chunk);
+
+            @memcpy(window[path.len + 1 ..][0..count], bytes[done..][0..count]);
+            if (try api.query(&self.endpoint, .files, protocol.pack(.write, @intCast(done)), window[0 .. path.len + 1 + count]) != count) return error.Invalid;
+            done += count;
+
+        }
+
+    }
+
     /// Sets permission bits; only system services may pass an `owner` other than null.
     pub fn change(self: *Files, path: []const u8, mode: u16, owner: ?u32) FileError!void {
 

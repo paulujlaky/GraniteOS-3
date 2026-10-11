@@ -5,17 +5,7 @@ const abi = @import("abi.zig");
 const permission = @import("permission.zig");
 
 const paging = arch.paging;
-pub const State = enum {
-
-    ready,
-    running,
-    sending,
-    receiving,
-    replying,
-    sleeping,
-    dead,
-
-};
+pub const State = abi.State;
 
 pub const Right = enum {
 
@@ -68,6 +58,8 @@ pub const Process = struct {
     signals: u64 = 0,
 
     home: u32,
+
+    /// Timer ticks that interrupted the process while it ran: its processor time at 100 Hz.
     preemptions: usize = 0,
 
     allocation: usize = paging.user_base + 0x10000000,
@@ -110,7 +102,8 @@ pub const Process = struct {
 
         }
 
-        for (0..4) |index| {
+        // 56 KiB of stack reaches down to the read-only environment page, which stops an overflow.
+        for (0..14) |index| {
 
             _ = try space.allocate(stack_top - (index + 1) * 4096, paging.user | paging.writable | paging.nx);
 
@@ -201,6 +194,24 @@ pub const Process = struct {
         self.policy = try permission.Policy.init(layer, permissions);
         self.identity = if (layer == .service) abi.system else abi.nobody;
         self.publish();
+
+    }
+
+    /// Describes the process for `stats`.
+    pub fn usage(self: *const Process) abi.Usage {
+
+        return .{
+
+            .id = self.id,
+            .owner = self.owner,
+            .image = if (self.image) |image| @intFromEnum(image) else abi.Usage.anonymous,
+            .identity = self.identity,
+            .layer = self.policy.layer,
+            .state = self.state,
+            .pages = self.space.resident(),
+            .ticks = self.preemptions,
+
+        };
 
     }
 

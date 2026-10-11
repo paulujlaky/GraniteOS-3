@@ -11,15 +11,56 @@ pub const Text = struct {
     length: usize = 0,
     caret: usize = 0,
 
+    /// Where a selection started; the selection runs from here to the caret.
+    anchor: ?usize = null,
+
     placeholder: []const u8 = "",
     secret: bool = false,
 
-    /// First visible line of multi-line text.
+    /// First visible line of multi-line text, and how far single-line text scrolled left, in pixels.
     top: usize = 0,
+    left: i32 = 0,
+
+    /// The caret position last scrolled into view, so scrolling away from the caret sticks until it moves.
+    mark: usize = std.math.maxInt(usize),
+
+    /// Bumped by every edit, so owners can tell unsaved changes.
+    version: u64 = 0,
+
+    pub const Range = struct {
+
+        start: usize,
+        end: usize,
+
+    };
 
     pub fn text(self: *const Text) []const u8 {
 
         return self.buffer[0..self.length];
+
+    }
+
+    /// The selected bytes' range, or null when nothing is selected.
+    pub fn selection(self: *const Text) ?Range {
+
+        const anchor = self.anchor orelse return null;
+        if (anchor == self.caret) return null;
+
+        return .{
+
+            .start = @min(anchor, self.caret),
+            .end = @max(anchor, self.caret),
+
+        };
+
+    }
+
+    /// The selected text; secret text never leaves.
+    pub fn selected(self: *const Text) []const u8 {
+
+        const range = self.selection() orelse return "";
+
+        return if (self.secret) "" else self.buffer[range.start..range.end];
 
     }
 
@@ -28,7 +69,10 @@ pub const Text = struct {
         std.crypto.secureZero(u8, self.buffer);
         self.length = 0;
         self.caret = 0;
+        self.anchor = null;
         self.top = 0;
+        self.left = 0;
+        self.version +%= 1;
 
     }
 
@@ -41,50 +85,132 @@ pub const Text = struct {
 
     }
 
-    /// Applies an editing key press; true when the text or caret changed.
+    pub fn all(self: *Text) void {
+
+        self.anchor = 0;
+        self.caret = self.length;
+
+    }
+
+    /// Selects the word around the caret.
+    pub fn word(self: *Text) void {
+
+        const string = self.text();
+        var first = self.caret;
+        var end = self.caret;
+
+        while (first > 0 and wordy(string[first - 1])) first -= 1;
+        while (end < string.len and wordy(string[end])) end += 1;
+
+        self.anchor = first;
+        self.caret = end;
+
+    }
+
+    /// Replaces the selection, if any, with `string`; false when it does not fit.
+    pub fn paste(self: *Text, string: []const u8) bool {
+
+        _ = self.erase();
+        if (self.length + string.len > self.buffer.len) return false;
+
+        std.mem.copyBackwards(u8, self.buffer[self.caret + string.len .. self.length + string.len], self.buffer[self.caret..self.length]);
+        @memcpy(self.buffer[self.caret..][0..string.len], string);
+        self.length += string.len;
+        self.caret += string.len;
+        self.version +%= 1;
+
+        return true;
+
+    }
+
+    /// Deletes the selection; false when there was none.
+    pub fn erase(self: *Text) bool {
+
+        const range = self.selection() orelse {
+
+            self.anchor = null;
+            return false;
+
+        };
+
+        self.caret = range.start;
+        self.anchor = null;
+        self.remove(range.end - range.start);
+
+        return true;
+
+    }
+
+    /// Applies an editing key press; true when the text, caret, or selection changed.
     pub fn key(self: *Text, event: api.Event, multiline: bool) bool {
 
         if (event.kind != .key or !event.pressed) return false;
+
+        const jump = event.modifiers.control;
 
         switch (event.key()) {
 
             .character => {
 
-                if (event.modifiers.control or event.modifiers.alt or event.char < 0x20 or event.char == 0x7f) return false;
+                if (event.chord(.{ .control = true }, 'a')) {
+
+                    self.all();
+                    return true;
+
+                }
+
+                if (event.modifiers.control or event.modifiers.alt or event.modifiers.super or event.char < 0x20 or event.char == 0x7f) return false;
                 return self.insert(event.char);
 
             },
             .enter => return multiline and self.insert('\n'),
+            .tab => return multiline and !event.modifiers.control and self.paste("    "),
             .backspace => {
 
+                if (self.erase()) return true;
                 if (self.caret == 0) return false;
 
                 const end = self.caret;
 
-                self.caret = self.before(self.caret);
+                self.caret = if (jump) self.boundary(self.caret, -1) else self.before(self.caret);
                 self.remove(end - self.caret);
 
             },
             .delete => {
 
+                if (self.erase()) return true;
                 if (self.caret == self.length) return false;
-                self.remove(self.after(self.caret) - self.caret);
+                self.remove((if (jump) self.boundary(self.caret, 1) else self.after(self.caret)) - self.caret);
 
             },
-            .left => {
+            .left, .right, .home, .end => {
 
-                if (self.caret == 0) return false;
-                self.caret = self.before(self.caret);
+                const range = self.selection();
+
+                // Without shift, an arrow collapses a selection to its edge.
+                if (!event.modifiers.shift and range != null and (event.key() == .left or event.key() == .right)) {
+
+                    self.caret = if (event.key() == .left) range.?.start else range.?.end;
+                    self.anchor = null;
+
+                    return true;
+
+                }
+
+                const target = switch (event.key()) {
+
+                    .left => if (self.caret == 0) 0 else if (jump) self.boundary(self.caret, -1) else self.before(self.caret),
+                    .right => if (self.caret == self.length) self.length else if (jump) self.boundary(self.caret, 1) else self.after(self.caret),
+                    .home => if (multiline and !jump) self.start(self.caret) else 0,
+                    else => if (multiline and !jump) std.mem.indexOfScalarPos(u8, self.text(), self.caret, '\n') orelse self.length else self.length,
+
+                };
+
+                if (target == self.caret and (event.modifiers.shift or self.anchor == null)) return false;
+
+                self.select(target, event.modifiers.shift);
 
             },
-            .right => {
-
-                if (self.caret == self.length) return false;
-                self.caret = self.after(self.caret);
-
-            },
-            .home => self.caret = if (multiline) self.start(self.caret) else 0,
-            .end => self.caret = if (multiline) std.mem.indexOfScalarPos(u8, self.text(), self.caret, '\n') orelse self.length else self.length,
             else => return false,
 
         }
@@ -93,35 +219,47 @@ pub const Text = struct {
 
     }
 
+    /// Moves the caret to `target`, extending the selection when `extend`, else dropping it.
+    pub fn select(self: *Text, target: usize, extend: bool) void {
+
+        if (extend and self.anchor == null) self.anchor = self.caret;
+        if (!extend) self.anchor = null;
+        self.caret = @min(target, self.length);
+
+    }
+
     /// Moves the caret `delta` wrapped lines, keeping its horizontal position; false at the first or last line.
-    pub fn vertical(self: *Text, face: *const font.Font, size: f32, width: i32, delta: i32) bool {
+    pub fn vertical(self: *Text, face: *const font.Font, size: f32, width: i32, delta: i32, extend: bool) bool {
 
         const scale = size / face.units;
         const string = self.text();
         var lines = Lines.init(face, string, size, width);
-        var previous: ?Line = null;
+        var trail: [64]Line = undefined;
+        var seen: usize = 0;
 
-        while (lines.next()) |line| {
+        while (lines.next()) |line| : (seen += 1) {
 
-            if (!line.holds(string, self.caret)) {
+            trail[seen % trail.len] = line;
+            if (!line.holds(string, self.caret)) continue;
 
-                previous = line;
-                continue;
-
-            }
-
-            const target = (if (delta < 0) previous else lines.next()) orelse return false;
             const x = face.measure(string[line.start..self.caret], scale);
-            var best = target.start;
+            var target = line;
 
-            for (target.start..target.end + 1) |position| {
+            if (delta < 0) {
 
-                if (position < string.len and inner(string[position])) continue;
-                if (@abs(face.measure(string[target.start..position], scale) - x) < @abs(face.measure(string[target.start..best], scale) - x)) best = position;
+                const back: usize = @min(@abs(delta), seen, trail.len - 1);
+                if (back == 0) return false;
+
+                target = trail[(seen - back) % trail.len];
+
+            } else {
+
+                for (0..@abs(delta)) |_| target = lines.next() orelse break;
+                if (target.start == line.start) return false;
 
             }
 
-            self.caret = best;
+            self.select(nearest(face, scale, string, target, x), extend);
 
             return true;
 
@@ -131,19 +269,45 @@ pub const Text = struct {
 
     }
 
+    /// The caret position closest to `x` pixels into wrapped line `row`, or into the only line of single-line text.
+    pub fn locate(self: *const Text, face: *const font.Font, size: f32, width: i32, x: f32, row: ?usize) usize {
+
+        const scale = size / face.units;
+        const string = self.text();
+
+        if (row == null) return nearest(face, scale, string, .{
+
+            .start = 0,
+            .end = string.len,
+
+        }, x);
+
+        var lines = Lines.init(face, string, size, width);
+        var index: usize = 0;
+        var last = Line{
+
+            .start = 0,
+            .end = 0,
+
+        };
+
+        while (lines.next()) |line| : (index += 1) {
+
+            last = line;
+            if (index == row.?) break;
+
+        }
+
+        return nearest(face, scale, string, last, x);
+
+    }
+
     fn insert(self: *Text, char: u21) bool {
 
         var bytes: [4]u8 = undefined;
         const count = std.unicode.utf8Encode(char, &bytes) catch return false;
 
-        if (self.length + count > self.buffer.len) return false;
-
-        std.mem.copyBackwards(u8, self.buffer[self.caret + count .. self.length + count], self.buffer[self.caret..self.length]);
-        @memcpy(self.buffer[self.caret..][0..count], bytes[0..count]);
-        self.length += count;
-        self.caret += count;
-
-        return true;
+        return self.paste(bytes[0..count]);
 
     }
 
@@ -153,6 +317,29 @@ pub const Text = struct {
         std.mem.copyForwards(u8, self.buffer[self.caret .. self.length - count], self.buffer[self.caret + count .. self.length]);
         self.length -= count;
         @memset(self.buffer[self.length..][0..count], 0);
+        self.version +%= 1;
+
+    }
+
+    /// Where the word before (`direction` -1) or after (1) `at` begins or ends.
+    fn boundary(self: *const Text, at: usize, direction: i8) usize {
+
+        const string = self.text();
+        var index = at;
+
+        if (direction < 0) {
+
+            while (index > 0 and !wordy(string[index - 1])) index -= 1;
+            while (index > 0 and wordy(string[index - 1])) index -= 1;
+
+        } else {
+
+            while (index < string.len and !wordy(string[index])) index += 1;
+            while (index < string.len and wordy(string[index])) index += 1;
+
+        }
+
+        return index;
 
     }
 
@@ -289,6 +476,47 @@ pub fn leading(face: *const font.Font, size: f32) i32 {
     const span: f32 = @floatFromInt(@as(i32, face.ascent) + @as(i32, @abs(face.descent)));
 
     return @intFromFloat(@ceil(span * size / face.units));
+
+}
+
+/// The position in `line` whose distance from the line's start is closest to `x` pixels.
+fn nearest(face: *const font.Font, scale: f32, string: []const u8, line: Line, x: f32) usize {
+
+    var best = line.start;
+    var distance = @abs(x);
+    var pen: f32 = 0;
+    var previous: u16 = 0;
+    var characters = font.Characters{
+
+        .bytes = string[0..line.end],
+        .index = line.start,
+
+    };
+
+    while (characters.next()) |char| {
+
+        const glyph = face.lookup(char);
+
+        pen += (face.kerning(previous, glyph) + face.advance(glyph)) * scale;
+        previous = glyph;
+
+        if (@abs(pen - x) < distance) {
+
+            distance = @abs(pen - x);
+            best = characters.index;
+
+        }
+
+    }
+
+    return best;
+
+}
+
+/// Whether `byte` belongs to a word: letters, digits, underscores, and any non-ASCII character.
+fn wordy(byte: u8) bool {
+
+    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte >= 0x80;
 
 }
 

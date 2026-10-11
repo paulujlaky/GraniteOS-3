@@ -6,8 +6,8 @@ const font = @import("font.zig");
 const Rect = canvas.Rect;
 const Point = canvas.Point;
 
-/// Bytes in each of the two halves of a surface's command buffer.
-pub const capacity = 64 * 1024;
+/// Bytes in each of the two halves of a surface's command buffer, unless it asks for more.
+pub const capacity = 256 * 1024;
 
 // Coordinates past this are refused, so no arithmetic on them can overflow.
 const reach = 1 << 20;
@@ -16,6 +16,7 @@ const Kind = enum(u32) {
 
     shape,
     text,
+    image,
     _,
 
 };
@@ -46,7 +47,17 @@ const Run = extern struct {
     baseline: i32,
     color: u32,
     size: f32,
+    face: u32,
     length: u32,
+
+};
+
+/// An image the client shared with the display, stretched over `area`.
+const Picture = extern struct {
+
+    header: Header,
+    area: [4]i32,
+    handle: [2]u32,
 
 };
 
@@ -67,11 +78,22 @@ pub const Command = union(enum) {
         baseline: i32,
         color: u32,
         size: f32,
+        face: font.Face,
         string: []const u8,
+
+    },
+    image: struct {
+
+        clip: Rect,
+        area: Rect,
+        handle: u64,
 
     },
 
 };
+
+/// Finds the pixels of a shared image by handle while replaying.
+pub const Images = *const fn (handle: u64) ?*const canvas.Canvas;
 
 /// Records drawing as commands for the display to render; mirrors `Canvas` so the same code draws either.
 pub const List = struct {
@@ -130,8 +152,8 @@ pub const List = struct {
 
     }
 
-    /// Draws UTF-8 `string` at `size` pixels with its baseline starting at (`x`, `baseline`).
-    pub fn text(self: *List, string: []const u8, size: f32, x: i32, baseline: i32, color: u32) void {
+    /// Draws UTF-8 `string` in `face` at `size` pixels with its baseline starting at (`x`, `baseline`).
+    pub fn text(self: *List, string: []const u8, face: font.Face, size: f32, x: i32, baseline: i32, color: u32) void {
 
         if (string.len == 0) return;
 
@@ -144,6 +166,7 @@ pub const List = struct {
             .baseline = baseline,
             .color = color,
             .size = size,
+            .face = @intFromEnum(face),
             .length = @intCast(string.len),
 
         }), string);
@@ -151,11 +174,33 @@ pub const List = struct {
     }
 
     /// Draws `string` vertically centred in `area`.
-    pub fn label(self: *List, string: []const u8, size: f32, area: Rect, color: u32, alignment: canvas.Alignment) void {
+    pub fn label(self: *List, string: []const u8, face: font.Face, size: f32, area: Rect, color: u32, alignment: canvas.Alignment) void {
 
-        const start = canvas.anchor(font.sans(), string, size, area, alignment);
+        const start = canvas.anchor(font.face(face), string, size, area, alignment);
 
-        self.text(string, size, start.x, start.y, color);
+        self.text(string, face, size, start.x, start.y, color);
+
+    }
+
+    /// Draws `icon` centred in `area`.
+    pub fn icon(self: *List, which: font.Icon, size: f32, area: Rect, color: u32) void {
+
+        self.label(which.text(), .icons, size, area, color, .center);
+
+    }
+
+    /// Draws shared image `handle` stretched over `area`.
+    pub fn image(self: *List, handle: u64, area: Rect) void {
+
+        const clip = self.visible(area) orelse return;
+
+        self.append(std.mem.asBytes(&Picture{
+
+            .header = header(.image, @sizeOf(Picture), clip),
+            .area = wire(area),
+            .handle = .{ @truncate(handle), @intCast(handle >> 32) },
+
+        }), "");
 
     }
 
@@ -241,7 +286,27 @@ pub const Iterator = struct {
                             .baseline = run.baseline,
                             .color = run.color,
                             .size = run.size,
+                            .face = std.enums.fromInt(font.Face, run.face) orelse continue,
                             .string = body[@sizeOf(Run)..][0..run.length],
+
+                        },
+
+                    };
+
+                },
+                .image => {
+
+                    if (body.len < @sizeOf(Picture)) continue;
+
+                    const picture = std.mem.bytesToValue(Picture, body[0..@sizeOf(Picture)]);
+
+                    return .{
+
+                        .image = .{
+
+                            .clip = clip,
+                            .area = rect(picture.area) orelse continue,
+                            .handle = @as(u64, picture.handle[1]) << 32 | picture.handle[0],
 
                         },
 
@@ -270,8 +335,8 @@ pub fn iterate(bytes: []const u8) Iterator {
 
 }
 
-/// Draws `bytes` of commands on the CPU, shifted by `origin` and kept inside `limit`.
-pub fn replay(target: *canvas.Canvas, bytes: []const u8, origin: Point, limit: Rect) void {
+/// Draws `bytes` of commands on the CPU, shifted by `origin` and kept inside `limit`; `images` finds shared images.
+pub fn replay(target: *canvas.Canvas, bytes: []const u8, origin: Point, limit: Rect, images: ?Images) void {
 
     const previous = target.limit;
     var commands = iterate(bytes);
@@ -291,7 +356,15 @@ pub fn replay(target: *canvas.Canvas, bytes: []const u8, origin: Point, limit: R
             .text => |run| {
 
                 target.limit = limit.intersect(move(run.clip, origin)) orelse continue;
-                target.text(font.sans(), run.string, run.size, run.x + origin.x, run.baseline + origin.y, run.color);
+                target.text(font.face(run.face), run.string, run.size, run.x + origin.x, run.baseline + origin.y, run.color);
+
+            },
+            .image => |picture| {
+
+                const source = (images orelse continue)(picture.handle) orelse continue;
+
+                target.limit = limit.intersect(move(picture.clip, origin)) orelse continue;
+                target.image(source, move(picture.area, origin));
 
             },
 

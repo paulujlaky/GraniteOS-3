@@ -16,12 +16,9 @@ const App = struct {
     session: u64 = 0,
     ending: bool = false,
 
-};
-
-/// Apps a session may launch by name.
-const registry = [_]struct { name: []const u8, image: api.abi.Image }{
-
-    .{ .name = "notes", .image = .notes },
+    /// What the launcher asked it to open, such as a path; it reads this with `argument`.
+    argument: [256]u8 = undefined,
+    length: usize = 0,
 
 };
 
@@ -117,7 +114,7 @@ fn maintain() void {
         }
 
         entry.id = child.first;
-        if (!application(image)) {
+        if (!image.application()) {
 
             const version = api.call(entry.id, protocol.pack(.hello, 0)) catch protocol.invalid;
             if (version != protocol.version) {
@@ -165,9 +162,12 @@ fn reap() void {
 
     if (!orphans) return;
 
-    orphans = for (registry) |entry| {
+    // The shell we keep running ourselves is not an orphan.
+    orphans = for (std.enums.values(api.abi.Image)) |image| {
 
-        const child = api.raw(.inspect, 0, @intFromEnum(entry.image), 0);
+        if (!image.launchable() or image == .shell) continue;
+
+        const child = api.raw(.inspect, 0, @intFromEnum(image), 0);
 
         if (child.number == 0) {
 
@@ -180,19 +180,21 @@ fn reap() void {
 
 }
 
+/// Starts the app named in the request, then a NUL and an optional argument, as the caller; it may call the caller back.
 fn launch(request: api.Request) u64 {
 
     const session = owner(request.first) orelse return protocol.denied;
-    var name: [32]u8 = undefined;
+    var bytes: [32 + 1 + 256]u8 = undefined;
 
-    if (request.fourth > name.len) return protocol.invalid;
-    api.fetch(request, 0, name[0..request.fourth]) catch return protocol.invalid;
+    if (request.fourth > bytes.len) return protocol.invalid;
+    api.fetch(request, 0, bytes[0..request.fourth]) catch return protocol.invalid;
 
-    const image = for (registry) |entry| {
+    const message = bytes[0..request.fourth];
+    const split = std.mem.indexOfScalar(u8, message, 0) orelse message.len;
+    const image = std.meta.stringToEnum(api.abi.Image, message[0..split]) orelse return protocol.missing;
+    const detail = message[@min(split + 1, message.len)..];
 
-        if (std.mem.eql(u8, entry.name, name[0..request.fourth])) break entry.image;
-
-    } else return protocol.missing;
+    if (!image.launchable()) return protocol.missing;
 
     const app = for (&apps) |*app| {
 
@@ -200,16 +202,37 @@ fn launch(request: api.Request) u64 {
 
     } else return protocol.full;
 
-    const id = api.spawn(image, request) catch |err| return if (err == error.Denied) protocol.denied else protocol.invalid;
+    const id = api.spawn(image, request, request.first) catch |err| return if (err == error.Denied) protocol.denied else protocol.invalid;
 
+    _ = api.raw(.connect, id, request.first, 0);
     app.* = .{
 
         .id = id,
         .session = session,
+        .length = detail.len,
 
     };
+    @memcpy(app.argument[0..detail.len], detail);
 
-    return 0;
+    return id;
+
+}
+
+/// Hands a launched app the argument it was started with.
+fn argument(request: api.Request) u64 {
+
+    for (&apps) |*app| {
+
+        if (app.id != request.first or app.id == 0) continue;
+        if (request.fourth < app.length) return protocol.invalid;
+
+        api.store(request, 0, app.argument[0..app.length]) catch return protocol.invalid;
+
+        return app.length;
+
+    }
+
+    return protocol.missing;
 
 }
 
@@ -238,13 +261,6 @@ fn end(session: u64) void {
 
 }
 
-/// Applications never answer `hello` and may not be crashed or restarted on request.
-fn application(image: api.abi.Image) bool {
-
-    return image == .shell or image == .client or image == .login or image == .notes;
-
-}
-
 fn handle(request: api.Request) u64 {
 
     const operation = protocol.operation(request.second);
@@ -270,7 +286,8 @@ fn handle(request: api.Request) u64 {
         .crash, .restart => {
 
             if (!api.sender(request).admin and (!options.self_test or request.first != client)) return protocol.invalid;
-            if (value >= entries.len or application(@enumFromInt(value))) return protocol.invalid;
+            // Applications never answer `hello` and may not be crashed or restarted on request.
+            if (value >= entries.len or @as(api.abi.Image, @enumFromInt(value)).application()) return protocol.invalid;
 
             const peer = entries[value].id;
 
@@ -308,6 +325,7 @@ fn handle(request: api.Request) u64 {
         },
 
         .launch => return launch(request),
+        .argument => return argument(request),
 
         .end => {
 

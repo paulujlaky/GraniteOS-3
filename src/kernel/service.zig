@@ -89,18 +89,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
 
     const bytes = switch (image) {
 
-        .serial => @embedFile("serial"),
-        .shell => @embedFile("shell"),
-        .helper => @embedFile("helper"),
-        .client => @embedFile("client"),
-        .storage => @embedFile("storage"),
-        .files => @embedFile("files"),
-        .accounts => @embedFile("accounts"),
-        .install => @embedFile("install"),
-        .display => @embedFile("display"),
-        .input => @embedFile("input"),
-        .login => @embedFile("login"),
-        .notes => @embedFile("notes"),
+        inline else => |tag| @embedFile(@tagName(tag)),
 
     };
 
@@ -243,7 +232,8 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
             try listen(task, 12);
 
         },
-        .shell, .client, .login, .notes => {
+        // Applications keep the default application policy.
+        else => {
 
         },
 
@@ -254,18 +244,6 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
     try owner.grant(.send, task.id, 1);
 
     return task.id;
-
-}
-
-/// Images that run with application permissions.
-pub fn application(image: abi.Image) bool {
-
-    return switch (image) {
-
-        .shell, .client, .login, .notes => true,
-        else => false,
-
-    };
 
 }
 

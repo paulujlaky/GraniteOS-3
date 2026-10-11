@@ -48,4 +48,7 @@ pub const Info = struct {
     /// The loader's own EFI file, kept so the installer can copy it.
     efi: ?Region = null,
 
+    /// The firmware's local time at boot in seconds since 1970-01-01 00:00:00; zero when its clock failed.
+    clock: u64 = 0,
+
 };

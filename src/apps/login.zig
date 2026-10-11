@@ -1,12 +1,14 @@
 const std = @import("std");
 
+const desktop = @import("desktop.zig");
+
 const api = @import("api");
 const gui = @import("gui");
 
 const theme = gui.theme;
 pub const panic = api.panic;
 
-const lock = api.Event.Modifiers{
+const lock_keys = api.Event.Modifiers{
 
     .shift = true,
     .control = true,
@@ -27,19 +29,23 @@ const avatar = gui.Style{
     .width = 36,
     .height = 36,
 
-    .background = theme.field,
+    .background = theme.selected,
     .radius = 18,
     .text_align = .center,
 
     .selected = .{
 
         .background = theme.accent,
+        .color = theme.background,
 
     },
 
 };
 
-var window: gui.Window = undefined;
+const months = [_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+const days = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+
+var greeter: gui.Window = undefined;
 var accounts = api.Accounts{};
 var state = State.choose;
 
@@ -74,36 +80,73 @@ var rows: [8]gui.Node = undefined;
 var parts: [8][2]*gui.Node = undefined;
 var list: [8]*gui.Node = undefined;
 
+var time_bytes: [8]u8 = undefined;
+var date_bytes: [40]u8 = undefined;
+var minute: u64 = std.math.maxInt(u64);
+
+var backdrop = gui.picture(&desktop.backdrop, .{
+
+});
+var dim = gui.box(.{
+
+    .background = gui.shade(0x000000, 150),
+
+}, &.{});
+var time = gui.label("", .{
+
+    .size = 76,
+    .text_align = .center,
+
+});
+var date = gui.label("", .{
+
+    .size = 18,
+    .color = theme.muted,
+    .text_align = .center,
+
+});
+var greeting = gui.label("Welcome to GraniteOS. Create the administrator account to begin.", theme.caption.with(.{
+
+    .text_align = .center,
+
+}));
 var users = gui.box(.{
 
-    .gap = 6,
+    .gap = 4,
 
 }, &list);
-var column = gui.box(.{
+var hint = gui.label("", theme.caption.with(.{
 
-    .width = 360,
-    .gap = 2 * theme.spacing,
+    .text_align = .center,
 
-}, &.{ &name, &users, &password });
-var greeter = gui.box(.{
+}));
+var form_parts = [_]*gui.Node{ &greeting, &name, &users, &password, &hint };
+var form = gui.box(.{
+
+    .width = 320,
+    .gap = theme.spacing,
+
+}, &form_parts);
+var spacer = gui.box(.{
+
+    .height = 40,
+
+}, &.{});
+var center_parts = [_]*gui.Node{ &time, &date, &spacer, &form };
+var center = gui.box(.{
 
     .justify = .center,
     .items = .center,
+    .gap = 6,
 
-}, &.{&column});
+}, &center_parts);
+var screen_parts = [_]*gui.Node{ &backdrop, &dim, &center };
+var screen = gui.box(.{
 
-var who = gui.label("", .{
+    .direction = .stack,
+    .background = theme.desktop,
 
-    .grow = 1,
-
-});
-var notes_button = gui.button("Notes", &openNotes);
-var lock_button = gui.button("Lock", &lockScreen);
-var logout_button = gui.button("Log out", &logout);
-var bar = gui.box(theme.bar, &.{ &notes_button, &who, &lock_button, &logout_button });
-var desktop = gui.box(.{
-
-}, &.{&bar});
+}, &screen_parts);
 
 pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
 
@@ -118,7 +161,21 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         });
         parts[index] = .{ &avatars[index], &labels[index] };
-        row.* = gui.box(theme.item, &parts[index]);
+        row.* = gui.box(theme.item.with(.{
+
+            .height = 50,
+            .hover = gui.Paint{
+
+                .background = gui.shade(0xffffff, 20),
+
+            },
+            .selected = gui.Paint{
+
+                .background = gui.shade(0xffffff, 34),
+
+            },
+
+        }), &parts[index]);
         row.data = index;
         list[index] = row;
 
@@ -126,8 +183,15 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
     name.action = &advance;
     password.action = &submit;
+    password.style = password.style.with(.{
 
-    window = gui.Window.open(&greeter, .{
+        .height = 40,
+
+    });
+    name.style = password.style;
+
+    desktop.init();
+    greeter = gui.Window.open(&screen, .{
 
         .layer = .overlay,
 
@@ -135,13 +199,30 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     load();
     sync();
 
+    const surfaces = desktop.windows();
+    const all = [_]*gui.Window{ surfaces[0], surfaces[1], surfaces[2], surfaces[3], surfaces[4], &greeter };
+
     while (true) {
 
-        const event = window.next(500) orelse continue;
+        tick();
+        desktop.tick();
 
-        react(event);
+        if (gui.wait(&all, 50)) |input| {
+
+            if (!desktop.react(input)) react(input.event);
+
+        }
+
+        if (state == .session) desktop.serve();
 
     }
+
+}
+
+/// Repaints the lock screen, such as after the wallpaper changed.
+pub fn redraw() void {
+
+    greeter.refresh();
 
 }
 
@@ -159,8 +240,8 @@ fn load() void {
 
         } orelse break;
 
-        lengths[count] = account.name.len;
-        @memcpy(names[count][0..account.name.len], account.name);
+        lengths[count] = @min(account.name.len, names[count].len);
+        @memcpy(names[count][0..lengths[count]], account.name[0..lengths[count]]);
         count += 1;
 
     }
@@ -172,11 +253,19 @@ fn load() void {
 
 }
 
-/// Shows the tree for the current state.
+/// Shows what the current state calls for.
 fn sync() void {
 
     name.hidden = state != .setup;
+    greeting.hidden = state != .setup;
     users.hidden = state == .setup;
+    hint.content.label = switch (state) {
+
+        .setup => "",
+        .locked => "Locked. Enter your password to unlock.",
+        else => if (count > 1) "Choose an account, then enter its password." else "",
+
+    };
 
     for (&rows, 0..) |*row, index| {
 
@@ -195,11 +284,33 @@ fn sync() void {
 
     }
 
-    if (count != 0) who.content.label = names[selected][0..lengths[selected]];
+    if (state == .session) {
 
-    window.show(if (state == .session) &desktop else &greeter);
-    window.focus(if (state == .session) null else if (state == .setup and name_text.length == 0) &name else &password);
-    window.stack(if (state == .session) .background else .overlay);
+        greeter.hide();
+
+    } else {
+
+        greeter.show();
+        greeter.focus(if (state == .setup and name_text.length == 0) &name else &password);
+
+    }
+
+    greeter.refresh();
+
+}
+
+/// Keeps the lock screen's clock current.
+fn tick() void {
+
+    const now = api.clock();
+    if (now / 60 == minute) return;
+
+    const today = api.Date.init(now);
+
+    minute = now / 60;
+    time.content.label = std.fmt.bufPrint(&time_bytes, "{d:0>2}:{d:0>2}", .{ today.hour, today.minute }) catch "";
+    date.content.label = std.fmt.bufPrint(&date_bytes, "{s}, {d} {s}", .{ days[today.weekday], today.day, months[today.month - 1] }) catch "";
+    greeter.refresh();
 
 }
 
@@ -207,7 +318,7 @@ fn react(event: api.Event) void {
 
     if (state == .session) {
 
-        if (event.chord(lock, 'l')) lockScreen(&bar) else if (event.chord(lock, 'q')) logout(&bar);
+        if (event.chord(lock_keys, 'l')) lock() else if (event.chord(lock_keys, 'q')) logout();
         return;
 
     }
@@ -245,7 +356,7 @@ fn select(index: usize) void {
 
 fn advance(_: *gui.Node) void {
 
-    window.focus(&password);
+    greeter.focus(&password);
 
 }
 
@@ -290,26 +401,21 @@ fn submit(_: *gui.Node) void {
 
     }
 
+    // Unlocking returns to the same desktop; signing in starts it.
+    if (state != .locked) desktop.start(names[selected][0..lengths[selected]]);
     state = .session;
 
 }
 
-fn lockScreen(_: *gui.Node) void {
+pub fn lock() void {
 
+    desktop.dismiss();
     state = .locked;
     sync();
 
 }
 
-fn openNotes(_: *gui.Node) void {
-
-    api.launch("notes") catch {
-
-    };
-
-}
-
-fn logout(_: *gui.Node) void {
+pub fn logout() void {
 
     api.end() catch {
 
@@ -317,6 +423,7 @@ fn logout(_: *gui.Node) void {
     accounts.logout() catch {
 
     };
+    desktop.stop();
     load();
     sync();
 

@@ -6,6 +6,12 @@ const draw = @import("draw.zig");
 const node = @import("node.zig");
 const text = @import("text.zig");
 
+comptime {
+
+    _ = @import("png.zig");
+
+}
+
 test "font rasterizes every printable ASCII glyph with solid stems and open counters" {
 
     const face = font.sans();
@@ -201,11 +207,11 @@ test "text wraps after spaces and moves the caret between wrapped lines" {
 
     };
 
-    try std.testing.expect(edit.vertical(face, 20, width, 1));
+    try std.testing.expect(edit.vertical(face, 20, width, 1, false));
     try std.testing.expectEqual(7, edit.caret);
-    try std.testing.expect(edit.vertical(face, 20, width, 1));
+    try std.testing.expect(edit.vertical(face, 20, width, 1, false));
     try std.testing.expectEqual(13, edit.caret);
-    try std.testing.expect(!edit.vertical(face, 20, width, 1));
+    try std.testing.expect(!edit.vertical(face, 20, width, 1, false));
 
 }
 
@@ -236,7 +242,7 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
         .height = 20,
 
     }, 8, 0xffffff);
-    list.label("Hi", 16, list.bounds(), 0x000000, .center);
+    list.label("Hi", .sans, 16, list.bounds(), 0x000000, .center);
 
     var direct = [_]u32{0} ** (32 * 24);
     var replayed = [_]u32{0} ** (32 * 24);
@@ -266,7 +272,7 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
 
     }, 8, 0xffffff);
     expected.label(font.sans(), "Hi", 16, expected.bounds(), 0x000000, .center);
-    draw.replay(&actual, list.commands(), .{}, actual.bounds());
+    draw.replay(&actual, list.commands(), .{}, actual.bounds(), null);
 
     try std.testing.expectEqualSlices(u32, &direct, &replayed);
 
@@ -280,6 +286,230 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
     @memset(bytes[4..8], 0xff);
     commands = draw.iterate(list.commands());
     try std.testing.expectEqual(null, commands.next());
+
+}
+
+test "translucent backgrounds keep their transparency through recording, stacking, and replay" {
+
+    var under = node.Node{
+
+        .style = .{
+
+            .background = 0x808080,
+
+        },
+
+    };
+    var dim = node.Node{
+
+        .style = .{
+
+            .background = canvas.shade(0x000000, 128),
+
+        },
+
+    };
+    var stack = node.Node{
+
+        .style = .{
+
+            .direction = .stack,
+
+        },
+        .content = .{
+
+            .box = &.{ &under, &dim },
+
+        },
+
+    };
+    var damage = canvas.Rect{};
+    var bytes: [1024]u8 align(4) = undefined;
+    var list = draw.List{
+
+        .bytes = &bytes,
+        .width = 8,
+        .height = 8,
+
+    };
+
+    stack.arrange(list.bounds(), &damage);
+    stack.paint(&list, .{}, 0);
+
+    var commands = draw.iterate(list.commands());
+    var colors: [2]u32 = undefined;
+    var count: usize = 0;
+
+    while (commands.next()) |command| : (count += 1) colors[count] = command.shape.color;
+
+    try std.testing.expectEqual(2, count);
+    try std.testing.expectEqual(0x7f000000, colors[1]);
+
+    var pixels = [_]u32{0} ** 64;
+    var target = canvas.Canvas{
+
+        .pixels = &pixels,
+        .width = 8,
+        .height = 8,
+
+    };
+
+    draw.replay(&target, list.commands(), .{}, target.bounds(), null);
+    try std.testing.expect(pixels[27] & 0xff > 0x38 and pixels[27] & 0xff < 0x48);
+
+}
+
+test "stacked children share the container and scrolled ones slide by its offset" {
+
+    var under = node.Node{};
+    var over = node.Node{};
+    var stack = node.Node{
+
+        .style = .{
+
+            .direction = .stack,
+            .padding = .all(2),
+
+        },
+        .content = .{
+
+            .box = &.{ &under, &over },
+
+        },
+
+    };
+    var damage = canvas.Rect{};
+
+    stack.arrange(.{
+
+        .width = 40,
+        .height = 30,
+
+    }, &damage);
+
+    try std.testing.expectEqual(canvas.Rect{ .x = 2, .y = 2, .width = 36, .height = 26 }, under.rect);
+    try std.testing.expectEqual(under.rect, over.rect);
+
+    var rows: [5]node.Node = undefined;
+    var children: [5]*node.Node = undefined;
+
+    for (&rows, &children) |*row, *child| {
+
+        row.* = .{
+
+            .style = .{
+
+                .height = 20,
+
+            },
+
+        };
+        child.* = row;
+
+    }
+
+    var list = node.Node{
+
+        .style = .{
+
+            .scroll = true,
+
+        },
+        .content = .{
+
+            .box = &children,
+
+        },
+        .offset = 80,
+
+    };
+    const area = canvas.Rect{
+
+        .width = 40,
+        .height = 50,
+
+    };
+
+    list.arrange(area, &damage);
+
+    // Scrolling stops once the last row shows.
+    try std.testing.expectEqual(100, list.extent);
+    try std.testing.expectEqual(50, list.offset);
+    try std.testing.expectEqual(10, rows[3].rect.y);
+
+    list.offset = 0;
+    list.arrange(area, &damage);
+    try std.testing.expectEqual(&list, list.wheel(.{ .x = 5, .y = 5 }, 30).?);
+    try std.testing.expectEqual(30, list.offset);
+
+    list.offset = 0;
+    list.arrange(area, &damage);
+    try std.testing.expect(list.reveal(&rows[4]));
+    try std.testing.expectEqual(50, list.offset);
+
+}
+
+test "text selections extend, replace, erase, and snap to words" {
+
+    var bytes: [32]u8 = undefined;
+    var edit = text.Text{
+
+        .buffer = &bytes,
+
+    };
+
+    edit.set("hello world");
+    edit.select(5, false);
+    edit.select(11, true);
+
+    try std.testing.expectEqualStrings(" world", edit.selected());
+    try std.testing.expect(edit.paste("!"));
+    try std.testing.expectEqualStrings("hello!", edit.text());
+    try std.testing.expectEqual(6, edit.caret);
+
+    edit.select(2, false);
+    edit.word();
+    try std.testing.expectEqualStrings("hello", edit.selected());
+    try std.testing.expect(edit.erase());
+    try std.testing.expectEqualStrings("!", edit.text());
+
+    // Secret text never leaves through a selection.
+    edit.secret = true;
+    edit.set("hunter2");
+    edit.all();
+    try std.testing.expectEqualStrings("", edit.selected());
+
+}
+
+test "style changes reach into nested colours and keep the rest of the base" {
+
+    const style = @import("style.zig");
+    const base = style.Style{
+
+        .radius = 4,
+        .hover = .{
+
+            .background = 1,
+            .border = 2,
+
+        },
+
+    };
+    const changed = base.with(.{
+
+        .width = 10,
+        .hover = .{
+
+            .background = 3,
+
+        },
+
+    });
+
+    try std.testing.expectEqual(10, changed.width.?);
+    try std.testing.expectEqual(4, changed.radius);
+    try std.testing.expectEqual(3, changed.hover.background.?);
+    try std.testing.expectEqual(2, changed.hover.border.?);
 
 }
 
@@ -314,7 +544,7 @@ test "UTF-8 text decodes leniently, keeps the caret on whole characters, and dra
 
     };
 
-    try std.testing.expect(edit.vertical(face, 20, 1000, 1));
+    try std.testing.expect(edit.vertical(face, 20, 1000, 1, false));
     try std.testing.expectEqual(7, edit.caret);
 
 }

@@ -7,13 +7,15 @@ pub const Event = packed struct(u64) {
     pressed: bool = false,
     modifiers: Modifiers = .{},
 
-    /// Key events: a `Key`. Button events: the button index. Motion and pointer events: held buttons.
+    /// Key events: a `Key`. Button events: the button index, 0 left, 1 right, 2 middle, then 3 and 4 for one wheel step up (away from the user) and down, which only press.
+    /// Motion and pointer events: held buttons, one bit per index.
     code: u8 = 0,
 
     /// The typed character of a key event as a Unicode code point, or zero.
     char: u16 = 0,
 
-    /// Motion events carry a relative delta; pointer and button events a position in surface coordinates; resize events the screen size.
+    /// Motion events carry a relative delta; pointer and button events a position in surface coordinates; resize events the surface's new size.
+    /// From the input service to the display, pointer events instead carry an absolute position scaled so 0..32767 spans the screen from its top-left corner, and button events none.
     x: i16 = 0,
     y: i16 = 0,
 
@@ -28,8 +30,18 @@ pub const Event = packed struct(u64) {
         /// The window manager's close control was clicked.
         close,
 
-        /// The screen changed size; `x` and `y` carry its new width and height.
+        /// The surface changed size; `x` and `y` carry its new width and height.
         resize,
+
+        /// The window manager reports a change; `code` holds a `Notice`.
+        notice,
+
+    };
+
+    pub const Notice = enum(u8) {
+
+        /// Windows opened, closed, or changed title, focus, or state; only the session hears it.
+        windows,
         _,
 
     };
@@ -46,6 +58,13 @@ pub const Event = packed struct(u64) {
     pub fn key(self: Event) Key {
 
         return @enumFromInt(self.code);
+
+    }
+
+    /// Whether this is a key press of `which` regardless of modifiers.
+    pub fn pressing(self: Event, which: Key) bool {
+
+        return self.kind == .key and self.pressed and self.key() == which;
 
     }
 

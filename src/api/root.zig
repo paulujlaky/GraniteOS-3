@@ -8,14 +8,17 @@ pub const Files = files.Files;
 pub const Accounts = @import("accounts.zig").Accounts;
 pub const display = @import("display.zig");
 pub const Display = display.Display;
+pub const pages = @import("heap.zig").pages;
 pub const Event = @import("event.zig").Event;
 pub const Key = @import("event.zig").Key;
+pub const Date = @import("time.zig").Date;
 pub const Request = abi.Request;
 pub const ApiError = error{ Denied, Invalid, Missing, Deadlock, Exhausted, Timeout, Busy };
 pub const ServiceError = ApiError || error{ Exists, Full };
 var environment: ?*const abi.Environment = null;
 
-extern fn invoke(request: *Request) callconv(.c) void;
+/// Makes the system call `request` describes, leaving the results in it.
+pub extern fn invoke(request: *Request) callconv(.c) void;
 
 pub const panic = std.debug.FullPanic(fatal);
 
@@ -168,9 +171,9 @@ pub const Shared = struct {
 
 };
 
-pub fn share(pages: usize) ApiError!Shared {
+pub fn share(count: usize) ApiError!Shared {
 
-    return mapped(try checked(raw(.share, pages, 0, 0)));
+    return mapped(try checked(raw(.share, count, 0, 0)));
 
 }
 
@@ -293,14 +296,31 @@ pub fn query(endpoint: *u64, image: abi.Image, message: u64, window: []u8) Servi
 
 }
 
-/// Starts app `name` running as the caller, in the caller's session; only signed-in sessions may.
-pub fn launch(name: []const u8) ServiceError!void {
+/// Starts app `name` running as the caller, in the caller's session, handing it `detail` as its argument; returns its process id.
+/// Only signed-in sessions may; the app may call the caller back.
+pub fn launch(name: []const u8, detail: []const u8) ServiceError!u64 {
 
-    var bytes: [32]u8 = undefined;
-    if (name.len > bytes.len) return error.Invalid;
+    var bytes: [32 + 1 + 256]u8 = undefined;
+    if (name.len > 32 or detail.len > 256) return error.Invalid;
 
     @memcpy(bytes[0..name.len], name);
-    try supervised(try exchange(0, protocol.pack(.launch, 0), bytes[0..name.len]));
+    bytes[name.len] = 0;
+    @memcpy(bytes[name.len + 1 ..][0..detail.len], detail);
+
+    const result = try exchange(0, protocol.pack(.launch, 0), bytes[0 .. name.len + 1 + detail.len]);
+
+    try supervised(result);
+
+    return result;
+
+}
+
+/// The argument this app was launched with, copied into `bytes`; empty when there is none.
+pub fn argument(bytes: []u8) []const u8 {
+
+    const length = exchange(0, protocol.pack(.argument, 0), bytes) catch return "";
+
+    return if (length <= bytes.len) bytes[0..length] else "";
 
 }
 
@@ -312,12 +332,13 @@ pub fn end() ServiceError!void {
 }
 
 /// Supervisor-only: spawns `image` as an application running as the sender of `request`, which must still await our reply.
-pub fn spawn(image: abi.Image, request: Request) ApiError!u64 {
+pub fn spawn(image: abi.Image, request: Request, parent: u64) ApiError!u64 {
 
     var message = Request{
 
         .number = @intFromEnum(abi.Call.spawn),
         .first = @intFromEnum(image),
+        .second = parent,
         .third = request.first,
         .fourth = request.third,
 
@@ -424,6 +445,26 @@ pub fn sleep(duration: u64) void {
 pub fn ticks() u64 {
 
     return raw(.ticks, 0, 0, 0).first;
+
+}
+
+/// Local time in seconds since 1970-01-01 00:00:00, or since boot when the firmware has no clock; `Date` breaks it into calendar fields.
+pub fn clock() u64 {
+
+    return raw(.clock, 0, 0, 0).first;
+
+}
+
+/// Fills `processes` with one record per live process, as many as fit, in no particular order; the summary says how many it wrote.
+pub fn stats(processes: []abi.Usage) ApiError!abi.Summary {
+
+    var summary = abi.Summary{
+
+    };
+
+    _ = try checked(raw(.stats, @intFromPtr(&summary), @intFromPtr(processes.ptr), processes.len));
+
+    return summary;
 
 }
 

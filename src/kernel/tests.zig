@@ -9,6 +9,7 @@ const schedule = @import("schedule.zig");
 const acpi = @import("../board/pc/acpi.zig");
 const permission = @import("permission.zig");
 const abi = @import("abi.zig");
+const paging = @import("../arch/root.zig").paging;
 
 test "physical allocator protects firmware state and detects invalid frees" {
 
@@ -60,6 +61,7 @@ test "physical allocator protects firmware state and detects invalid frees" {
     var frames = try memory.Frames.init(&regions, &storage, 0x101000, 4096);
 
     try std.testing.expectEqual(3, frames.free_count);
+    try std.testing.expectEqual(3, frames.total);
 
     const first = try frames.alloc();
 
@@ -556,6 +558,49 @@ test "scheduler rotates ready processes without running blocked or foreign tasks
     third.state = .running;
     try std.testing.expectEqual(null, schedule.choose(&first, 0, 0));
     try std.testing.expectEqual(&second, schedule.choose(&first, 1, 0).?);
+
+}
+
+test "process usage counts the RAM it maps but not device memory and marks imageless processes" {
+
+    // Root, directory pointer, directory, and table; the root's second entry covers user space.
+    var tables: [4]paging.Table align(4096) = std.mem.zeroes([4]paging.Table);
+
+    tables[0][1] = @intFromPtr(&tables[1]) | 7;
+    tables[1][0] = @intFromPtr(&tables[2]) | 7;
+    tables[2][0] = @intFromPtr(&tables[3]) | 7;
+    tables[3][0] = 0x200000 | 7;
+    tables[3][1] = 0x201000 | 7 | paging.borrowed;
+    tables[3][2] = 0xfd000000 | 7 | paging.borrowed | paging.uncached;
+
+    var sleeper = task(4);
+
+    sleeper.space = .{
+
+        .root = @intFromPtr(&tables[0]),
+        .frames = undefined,
+
+    };
+    sleeper.owner = 0;
+    sleeper.image = null;
+    sleeper.state = .sleeping;
+    sleeper.preemptions = 12;
+
+    var record = sleeper.usage();
+
+    try std.testing.expectEqual(4, record.id);
+    try std.testing.expectEqual(abi.Usage.anonymous, record.image);
+    try std.testing.expectEqual(.sleeping, record.state);
+    try std.testing.expectEqual(.service, record.layer);
+    try std.testing.expectEqual(2, record.pages);
+    try std.testing.expectEqual(12, record.ticks);
+
+    sleeper.image = .files;
+    tables[0][1] = 0;
+    record = sleeper.usage();
+
+    try std.testing.expectEqual(@intFromEnum(abi.Image.files), record.image);
+    try std.testing.expectEqual(0, record.pages);
 
 }
 

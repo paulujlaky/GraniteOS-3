@@ -276,6 +276,48 @@ pub fn Volume(comptime Disk: type) type {
 
         }
 
+        /// Moves `from` to `to`, which must not exist yet, within or between directories; a directory never moves into itself.
+        pub fn rename(self: *Self, from: []const u8, to: []const u8) Error!void {
+
+            const source_parent, const source_name = try split(from);
+            const target_parent, const target_name = try split(to);
+
+            if (std.mem.startsWith(u8, to, from) and to.len > from.len and to[from.len] == '/') return error.Invalid;
+
+            const source = try self.resolve(source_parent);
+            const target = try self.resolve(target_parent);
+            const found = try self.lookup(source, source_name) orelse return error.Missing;
+
+            if (try self.lookup(target, target_name) != null) return error.Exists;
+
+            try self.open(source);
+            try self.require(2);
+            try self.open(target);
+            try self.require(2);
+
+            // The new name goes in first, so a failure in between leaves two names rather than none.
+            self.record = std.mem.zeroes(Record);
+            self.record.node = found.node;
+            self.record.length = @intCast(target_name.len);
+            @memcpy(self.record.name[0..target_name.len], target_name);
+            try self.put(target, self.node.size, std.mem.asBytes(&self.record));
+
+            try self.open(source);
+            const last = self.node.size / record_size - 1;
+
+            if (found.index != last) {
+
+                _ = try self.get(source, last * record_size, std.mem.asBytes(&self.record));
+                try self.put(source, found.index * record_size, std.mem.asBytes(&self.record));
+
+            }
+
+            try self.open(source);
+            try self.resize(source, last * record_size);
+            try self.disk.flush();
+
+        }
+
         pub fn read(self: *Self, path: []const u8, offset: u64, out: []u8) Error!usize {
 
             const node = try self.file(path, 4);

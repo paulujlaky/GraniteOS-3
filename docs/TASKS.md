@@ -47,9 +47,9 @@
 - [ ] GPU-accelerated rendering wherever supported (VMware done; Intel pending).
 - [x] Graphical login and screen locking.
 - [x] Window management and a shared widget toolkit.
-- [ ] Desktop shell and application launching.
+- [x] Desktop shell and application launching.
 - [ ] Desktop responsiveness, rendering, and usability improvements over GraniteOS 2.
-- [ ] File manager, editor, image viewer, settings, and system monitoring.
+- [x] File manager, editor, image viewer, settings, and system monitoring.
 - [ ] Remaining GraniteOS 2 desktop utilities with independently implemented code.
 
 ## Milestone 6: Workflows

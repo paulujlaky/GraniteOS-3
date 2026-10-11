@@ -43,6 +43,8 @@ pub const Call = enum(u64) {
     detach = 29,
     alive = 30,
     physical = 31,
+    clock = 32,
+    stats = 33,
     _,
 
 };
@@ -60,6 +62,7 @@ pub const Status = enum(u64) {
 
 };
 
+/// Every program the kernel embeds; each builds from `src/apps/NAME.zig` or `src/services/NAME.zig`.
 pub const Image = enum(u64) {
 
     serial,
@@ -73,7 +76,31 @@ pub const Image = enum(u64) {
     display,
     input,
     login,
-    notes,
+    explorer,
+    editor,
+    terminal,
+    monitor,
+    viewer,
+    settings,
+
+    /// Runs with application permissions rather than as a service.
+    pub fn application(self: Image) bool {
+
+        return switch (self) {
+
+            .serial, .helper, .storage, .files, .accounts, .install, .display, .input => false,
+            else => true,
+
+        };
+
+    }
+
+    /// A signed-in session may launch it by name.
+    pub fn launchable(self: Image) bool {
+
+        return self.application() and self != .client and self != .login;
+
+    }
 
 };
 
@@ -141,5 +168,64 @@ pub const Environment = extern struct {
 
     /// The PCI function a driver service was granted, by BAR index; unused entries are empty.
     bars: [6]Bar = [_]Bar{.{}} ** 6,
+
+};
+
+/// Where a process stands with the scheduler.
+pub const State = enum(u64) {
+
+    ready,
+    running,
+    sending,
+    receiving,
+    replying,
+    sleeping,
+    dead,
+
+};
+
+/// System-wide counters from `stats`; ticks count timer interrupts at 100 Hz.
+pub const Summary = extern struct {
+
+    /// Physical pages the kernel allocates from, and how many of those are free.
+    pages: u64 = 0,
+    free: u64 = 0,
+
+    processors: u64 = 0,
+    uptime: u64 = 0,
+
+    /// Ticks, summed over every processor, that found a process running or the processor idle.
+    busy: u64 = 0,
+    idle: u64 = 0,
+
+    /// Live processes, and how many of them were written to the caller's records.
+    processes: u64 = 0,
+    records: u64 = 0,
+
+};
+
+/// One live process, as reported by `stats`.
+pub const Usage = extern struct {
+
+    id: u64,
+
+    /// The process that started it; zero when the kernel did, as for the supervisor.
+    owner: u64,
+
+    /// An `Image` value, or `anonymous`.
+    image: u64,
+
+    identity: Identity,
+    layer: Layer,
+    state: State,
+
+    /// RAM pages mapped into the process: its own, DMA buffers, and every shared region it holds; device memory and page tables are left out.
+    pages: u64,
+
+    /// Ticks that found the process running.
+    ticks: u64,
+
+    /// The `image` of a process started without one, such as the supervisor.
+    pub const anonymous = ~@as(u64, 0);
 
 };

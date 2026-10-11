@@ -176,6 +176,30 @@ pub const Space = struct {
 
     }
 
+    /// Counts the user pages backed by RAM; device mappings and the tables themselves are left out.
+    pub fn resident(self: Space) usize {
+
+        const entry = table(self.root)[1];
+
+        return if (entry & 1 != 0) tally(@intCast(entry & mask), 3) else 0;
+
+    }
+
+    fn tally(address: usize, depth: usize) usize {
+
+        var pages: usize = 0;
+
+        for (table(address)) |entry| {
+
+            if (entry & 1 == 0) continue;
+            pages += if (depth > 1) tally(@intCast(entry & mask), depth - 1) else @intFromBool(entry & uncached == 0);
+
+        }
+
+        return pages;
+
+    }
+
     pub fn destroy(self: *Space) void {
 
         const entry = table(self.root)[1];

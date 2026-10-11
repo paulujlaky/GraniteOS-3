@@ -14,7 +14,9 @@ const set_viewport = 1055;
 const clear = 1057;
 const set_shader = 1061;
 const draw = 1063;
+const destroy_object = 1094;
 const define_surface = 1097;
+const destroy_surface = 1098;
 const bind_surface = 1099;
 const update_image = 1101;
 const readback_image = 1103;
@@ -85,6 +87,7 @@ const mag_filter = 11;
 const min_filter = 12;
 const clamp = 3;
 const nearest = 1;
+const linear = 2;
 
 // vs_2_0: dcl_position v0; dcl_texcoord v1; dcl_color v2; mov oPos, v0; mov oT0.xy, v1; mov oD0, v2
 const passthrough = [_]u32{
@@ -121,9 +124,13 @@ const atlas = 2;
 const result = 3;
 const code = 4;
 const state = 5;
-const objects = 6;
 
-// One page holds each object table: memory objects, surfaces, contexts, shaders, and screen targets.
+/// Clients' images, each a texture of its own, follow the fixed objects.
+const pictures = 6;
+pub const textures = 48;
+const objects = pictures + textures;
+
+// One page holds each object table: memory objects, surfaces, contexts, shaders, and screen targets; 64 surfaces fit.
 const tables = 5;
 
 const context = 0;
@@ -174,12 +181,21 @@ const Kind = enum(u2) {
 
     corner,
     glyph,
+    patch,
 
 };
 
 // The shape cache and page tables, kept outside `Gpu` so passing one around copies little on a small stack.
 var slots = [_]Slot{.{}} ** 2048;
 var maps = [_]Paging{.{}} ** objects;
+
+
+/// The size each image texture was defined at, zero while undefined, and our copy of its pixels.
+var defined = [_][2]u32{.{ 0, 0 }} ** textures;
+var copies = [_]?api.Shared{null} ** textures;
+
+/// Finds the texture slot of an image handle the commands being drawn name.
+pub const Textures = *const fn (handle: u64) ?usize;
 
 /// Draws everything on the SVGA3D device: each command becomes textured quads, tinted and blended in one shader.
 pub const Gpu = struct {
@@ -221,6 +237,15 @@ pub const Gpu = struct {
     }
 
     fn setup(device: *svga.Device, width: u32, height: u32) !?Gpu {
+
+        @memset(&defined, .{ 0, 0 });
+
+        for (&copies) |*copy| if (copy.*) |memory| {
+
+            api.detach(memory.handle);
+            copy.* = null;
+
+        };
 
         // Tables from an earlier display are dropped along with every object they held.
         for (0..tables) |kind| {
@@ -357,8 +382,8 @@ pub const Gpu = struct {
 
     }
 
-    /// Queues `bytes` of drawing commands, shifted by `origin` and kept inside `limit`.
-    pub fn render(self: *Gpu, bytes: []const u8, origin: gui.Point, limit: gui.Rect) void {
+    /// Queues `bytes` of drawing commands, shifted by `origin` and kept inside `limit`; `images` finds their textures.
+    pub fn render(self: *Gpu, bytes: []const u8, origin: gui.Point, limit: gui.Rect, images: Textures) void {
 
         var commands = gui.draw.iterate(bytes);
 
@@ -367,11 +392,65 @@ pub const Gpu = struct {
             switch (command) {
 
                 .shape => |shape| self.rounded(gui.draw.move(shape.area, origin), shape.radius, shape.color, limit.intersect(gui.draw.move(shape.clip, origin)) orelse continue),
-                .text => |line| self.write(line.string, line.size, line.x + origin.x, line.baseline + origin.y, line.color, limit.intersect(gui.draw.move(line.clip, origin)) orelse continue),
+                .text => |line| self.write(line.string, line.face, line.size, line.x + origin.x, line.baseline + origin.y, line.color, limit.intersect(gui.draw.move(line.clip, origin)) orelse continue),
+                .image => |shown| self.picture(images(shown.handle) orelse continue, gui.draw.move(shown.area, origin), limit.intersect(gui.draw.move(shown.clip, origin)) orelse continue),
 
             }
 
         }
+
+    }
+
+    /// Makes `pixels`, `width` by `height` premultiplied, the texture of image `slot`, or refreshes it.
+    pub fn upload(self: *Gpu, slot: usize, pixels: []const u32, width: u32, height: u32) void {
+
+        const id: u32 = @intCast(pictures + slot);
+
+        // The device reads our own copy, so a client can neither change nor free what it is drawing.
+        if (defined[slot][0] != width or defined[slot][1] != height) {
+
+            self.discard(slot);
+
+            const copy = api.share(std.math.divCeil(usize, pixels.len * 4, 4096) catch unreachable) catch return;
+
+            self.lend(id, copy) catch {
+
+                api.detach(copy.handle);
+                return;
+
+            };
+            copies[slot] = copy;
+            self.surface(id, texture_hint, a8r8g8b8, width, height);
+            defined[slot] = .{ width, height };
+
+        } else {
+
+            // Quads already staged may still want the old pixels.
+            self.flush();
+
+        }
+
+        @memcpy(std.mem.bytesAsSlice(u32, copies[slot].?.bytes[0 .. pixels.len * 4]), pixels);
+        self.update(id, 0, 0, width, height);
+
+    }
+
+    /// Drops image `slot`'s texture, once the device has drawn everything that used it.
+    pub fn discard(self: *Gpu, slot: usize) void {
+
+        if (defined[slot][0] == 0) return;
+
+        const id: u32 = @intCast(pictures + slot);
+
+        self.flush();
+        self.device.idle();
+        self.busy = false;
+        self.device.submit(destroy_surface, &.{id});
+        self.device.submit(destroy_object, &.{id});
+        self.device.idle();
+        api.detach(copies[slot].?.handle);
+        copies[slot] = null;
+        defined[slot] = .{ 0, 0 };
 
     }
 
@@ -380,6 +459,55 @@ pub const Gpu = struct {
 
         self.flush();
         self.device.submit(update_target, &.{ 0, @intCast(area.x), @intCast(area.y), @intCast(area.width), @intCast(area.height) });
+
+    }
+
+    /// Lays `area` of `source`, a frame drawn on the CPU, over everything drawn so far; at most `largest_corner` square.
+    pub fn patch(self: *Gpu, source: *const gui.Canvas, area: gui.Rect) void {
+
+        const reserved = cached(pack(.patch, 0, 0, 0)) orelse self.insert(pack(.patch, 0, 0, 0), largest_corner, largest_corner) orelse return;
+        const width: u32 = @intCast(@min(area.width, largest_corner));
+        const height: u32 = @intCast(@min(area.height, largest_corner));
+        const texels = std.mem.bytesAsSlice(u32, self.atlas.bytes);
+
+        // Staged quads may sample the last patch, and the device may still be reading it.
+        self.flush();
+        self.device.idle();
+        self.busy = false;
+
+        for (0..height) |y| {
+
+            for (0..width) |x| texels[(reserved.y + y) * atlas_size + reserved.x + x] = 0xff000000 | source.pixels[(@as(usize, @intCast(area.y)) + y) * source.width + @as(usize, @intCast(area.x)) + x];
+
+        }
+
+        const slot = Slot{
+
+            .x = reserved.x,
+            .y = reserved.y,
+            .width = width,
+            .height = height,
+
+        };
+        const shown = gui.Rect{
+
+            .x = area.x,
+            .y = area.y,
+            .width = @intCast(width),
+            .height = @intCast(height),
+
+        };
+
+        self.dirty = self.dirty.join(.{
+
+            .x = @intCast(slot.x),
+            .y = @intCast(slot.y),
+            .width = shown.width,
+            .height = shown.height,
+
+        });
+        self.quad(shown, slot, false, false, 0xffffff, shown);
+        self.flush();
 
     }
 
@@ -432,10 +560,52 @@ pub const Gpu = struct {
 
     }
 
-    /// Lays out UTF-8 `string` like `Canvas.text`, one glyph quad per character.
-    fn write(self: *Gpu, string: []const u8, size: f32, x: i32, baseline: i32, color: u32, clip: gui.Rect) void {
+    /// Draws image `slot` stretched over `area`, filtered smoothly.
+    fn picture(self: *Gpu, slot: usize, area: gui.Rect, clip: gui.Rect) void {
 
-        const face = gui.sans();
+        const visible = area.intersect(clip) orelse return;
+        if (defined[slot][0] == 0) return;
+
+        const width: f32 = @floatFromInt(area.width);
+        const height: f32 = @floatFromInt(area.height);
+
+        // Quads already staged sample the atlas, so they go first.
+        self.flush();
+        self.sample(@intCast(pictures + slot), linear);
+        self.stage(visible, .{
+
+            @as(f32, @floatFromInt(visible.x - area.x)) / width,
+            @as(f32, @floatFromInt(visible.right() - area.x)) / width,
+
+        }, .{
+
+            @as(f32, @floatFromInt(visible.y - area.y)) / height,
+            @as(f32, @floatFromInt(visible.bottom() - area.y)) / height,
+
+        }, 0xffffffff);
+        self.flush();
+        self.sample(atlas, nearest);
+
+    }
+
+    /// Binds texture `id` to the one sampler, read with `filter`.
+    fn sample(self: *Gpu, id: u32, filter: u32) void {
+
+        self.device.submit(set_texture_state, &.{
+
+            context,
+            0, min_filter, filter,
+            0, mag_filter, filter,
+            0, bind_texture, id,
+
+        });
+
+    }
+
+    /// Lays out UTF-8 `string` like `Canvas.text`, one glyph quad per character.
+    fn write(self: *Gpu, string: []const u8, which: gui.Face, size: f32, x: i32, baseline: i32, color: u32, clip: gui.Rect) void {
+
+        const face = gui.font.face(which);
         const scale = size / face.units;
         var pen: f32 = @floatFromInt(x);
         var previous: u16 = 0;
@@ -454,7 +624,7 @@ pub const Gpu = struct {
             if (left > clip.right()) return;
 
             // Quarter-pixel positions keep spacing even while letting each shape be cached.
-            if (self.letter(glyph, size, @intFromFloat((pen - whole) * 4))) |slot| self.quad(.{
+            if (self.letter(which, glyph, size, @intFromFloat((pen - whole) * 4))) |slot| self.quad(.{
 
                 .x = left + slot.left,
                 .y = baseline + slot.top,
@@ -473,17 +643,6 @@ pub const Gpu = struct {
     fn quad(self: *Gpu, area: gui.Rect, slot: ?Slot, mirror_x: bool, mirror_y: bool, color: u32, clip: gui.Rect) void {
 
         const visible = area.intersect(clip) orelse return;
-
-        if (self.count == quads) self.flush();
-
-        // The device may still be copying the last batch out of the staging memory.
-        if (self.busy) {
-
-            self.device.idle();
-            self.busy = false;
-
-        }
-
         const centre: f32 = @as(f32, solid / 2) / atlas_size;
         var u = [2]f32{ centre, centre };
         var v = [2]f32{ centre, centre };
@@ -495,11 +654,33 @@ pub const Gpu = struct {
 
         }
 
+        // Colours carry transparency in their top byte; the blend wants them premultiplied and opaque-alpha.
+        const alpha = 255 - (color >> 24);
+        var tinted = alpha << 24;
+
+        for ([_]u5{ 0, 8, 16 }) |shift| tinted |= (color >> shift & 0xff) * alpha / 255 << shift;
+
+        self.stage(visible, u, v, tinted);
+
+    }
+
+    /// Stages one quad covering `visible`, sampling from `u` and `v`, tinted by premultiplied `tinted`.
+    fn stage(self: *Gpu, visible: gui.Rect, u: [2]f32, v: [2]f32, tinted: u32) void {
+
+        if (self.count == quads) self.flush();
+
+        // The device may still be copying the last batch out of the staging memory.
+        if (self.busy) {
+
+            self.device.idle();
+            self.busy = false;
+
+        }
+
         const left = edge(visible.x, self.columns, self.shift);
         const right = edge(visible.right(), self.columns, self.shift);
         const top = -edge(visible.y, self.rows, self.shift);
         const bottom = -edge(visible.bottom(), self.rows, self.shift);
-        const tinted = 0xff000000 | color;
         const staged: *[6]Vertex = @ptrCast(@alignCast(self.vertices.bytes[self.count * quad_bytes ..][0..quad_bytes]));
 
         staged.* = .{
@@ -575,12 +756,12 @@ pub const Gpu = struct {
 
     }
 
-    fn letter(self: *Gpu, index: u16, size: f32, quarter: u2) ?Slot {
+    fn letter(self: *Gpu, which: gui.Face, index: u16, size: f32, quarter: u2) ?Slot {
 
-        const key = pack(.glyph, index, size, quarter);
+        const key = pack(.glyph, @as(u32, @intFromEnum(which)) << 16 | index, size, quarter);
         if (cached(key)) |slot| return if (slot.width == 0) null else slot;
 
-        const face = gui.sans();
+        const face = gui.font.face(which);
         const bitmap = face.render(index, size / face.units, @as(f32, @floatFromInt(quarter)) / 4) orelse {
 
             _ = self.insert(key, 0, 0);

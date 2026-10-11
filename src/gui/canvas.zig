@@ -120,6 +120,47 @@ const Bounds = struct {
 
 };
 
+/// `color` made `amount` (0 to 255) opaque; colours are 0xTTRRGGBB, where TT is transparency, so plain 0xRRGGBB is opaque.
+pub fn shade(color: u32, amount: u8) u32 {
+
+    return (@as(u32, 255 - amount) << 24) | (color & 0xffffff);
+
+}
+
+/// How opaque colour `color` is, from 0 to 1.
+pub fn opacity(color: u32) f32 {
+
+    return @as(f32, @floatFromInt(255 - (color >> 24))) / 255;
+
+}
+
+/// What lay under the bottom corners of an area before drawing in it; see `Canvas.save`.
+pub const Corners = struct {
+
+    /// The widest curve kept; larger radii round as this.
+    pub const largest = 16;
+
+    area: Rect = .{},
+    radius: i32 = 0,
+    limit: Rect = .{},
+    pixels: [2][largest * largest]u32 = undefined,
+
+    /// The bottom-left and bottom-right squares the curve cuts into.
+    pub fn squares(self: *const Corners) [2]Rect {
+
+        const r = @max(@min(self.radius, @divTrunc(@min(self.area.width, self.area.height), 2)), 0);
+
+        return .{
+
+            .{ .x = self.area.x, .y = self.area.bottom() - r, .width = r, .height = r },
+            .{ .x = self.area.right() - r, .y = self.area.bottom() - r, .width = r, .height = r },
+
+        };
+
+    }
+
+};
+
 /// Pixels as 0x00RRGGBB, row after row.
 pub const Canvas = struct {
 
@@ -143,19 +184,17 @@ pub const Canvas = struct {
 
     pub fn fill(self: *Canvas, area: Rect, color: u32) void {
 
-        const clipped = self.clip(area) orelse return;
-
-        for (clipped.top..clipped.bottom) |y| @memset(self.pixels[y * self.width ..][clipped.left..clipped.right], color);
+        self.round(area, 0, color);
 
     }
 
     /// Fills `area` with anti-aliased corners of `radius` pixels.
     pub fn round(self: *Canvas, area: Rect, radius: i32, color: u32) void {
 
-        const limit = @min(radius, @divTrunc(@min(area.width, area.height), 2));
-        if (limit <= 0) return self.fill(area, color);
-
+        const limit = @max(@min(radius, @divTrunc(@min(area.width, area.height), 2)), 0);
         const clipped = self.clip(area) orelse return;
+        const solid = color >> 24 == 0;
+        const alpha = opacity(color);
         const r: f32 = @floatFromInt(limit);
         const left: f32 = @floatFromInt(area.x);
         const top: f32 = @floatFromInt(area.y);
@@ -169,7 +208,7 @@ pub const Canvas = struct {
             const dy = fy - std.math.clamp(fy, top + r, bottom - r);
 
             // Rows between the corners are solid.
-            if (dy == 0) {
+            if (dy == 0 and solid) {
 
                 @memset(row[clipped.left..clipped.right], color);
                 continue;
@@ -180,8 +219,73 @@ pub const Canvas = struct {
 
                 const fx = @as(f32, @floatFromInt(x)) + 0.5;
                 const dx = fx - std.math.clamp(fx, left + r, right - r);
+                const inside = if (dx == 0 and dy == 0) 1 else r - @sqrt(dx * dx + dy * dy) + 0.5;
 
-                blend(&row[x], color, r - @sqrt(dx * dx + dy * dy) + 0.5);
+                blend(&row[x], color, @min(inside, 1) * alpha);
+
+            }
+
+        }
+
+    }
+
+    /// Saves the pixels in the bottom corners of `area` within `limit`, so `trim` can round off what is drawn there next.
+    pub fn save(self: *const Canvas, kept: *Corners, area: Rect, radius: i32, limit: Rect) void {
+
+        kept.* = .{
+
+            .area = area,
+            .radius = @min(radius, Corners.largest),
+            .limit = limit.intersect(self.bounds()) orelse return,
+
+        };
+
+        for (kept.squares(), &kept.pixels) |square, *saved| {
+
+            const visible = square.intersect(kept.limit) orelse continue;
+
+            for (0..@intCast(visible.height)) |y| {
+
+                const row = self.pixels[(@as(usize, @intCast(visible.y)) + y) * self.width + @as(usize, @intCast(visible.x)) ..];
+
+                @memcpy(saved[y * Corners.largest ..][0..@intCast(visible.width)], row[0..@intCast(visible.width)]);
+
+            }
+
+        }
+
+    }
+
+    /// Blends the pixels `save` kept back over everything drawn outside the curve of its corners.
+    pub fn trim(self: *Canvas, kept: *const Corners) void {
+
+        const squares = kept.squares();
+        const r: f32 = @floatFromInt(squares[0].width);
+        const left: f32 = @floatFromInt(kept.area.x);
+        const right: f32 = @floatFromInt(kept.area.right());
+        const bottom: f32 = @floatFromInt(kept.area.bottom());
+
+        for (squares, &kept.pixels) |square, *saved| {
+
+            const visible = square.intersect(kept.limit) orelse continue;
+
+            for (0..@intCast(visible.height)) |y| {
+
+                for (0..@intCast(visible.width)) |x| {
+
+                    const point = Point{
+
+                        .x = visible.x + @as(i32, @intCast(x)),
+                        .y = visible.y + @as(i32, @intCast(y)),
+
+                    };
+                    const fx = @as(f32, @floatFromInt(point.x)) + 0.5;
+                    const dx = fx - std.math.clamp(fx, left + r, right - r);
+                    const dy = @max(@as(f32, @floatFromInt(point.y)) + 0.5 - (bottom - r), 0);
+
+                    blend(self.at(point), saved[y * Corners.largest + x], 1 - std.math.clamp(r - @sqrt(dx * dx + dy * dy) + 0.5, 0, 1));
+
+                }
 
             }
 
@@ -194,6 +298,7 @@ pub const Canvas = struct {
 
         const scale = size / face.units;
         const visible = self.region() orelse return;
+        const alpha = opacity(color);
         var pen: f32 = @floatFromInt(x);
         var previous: u16 = 0;
         var characters = font.decode(string);
@@ -221,7 +326,7 @@ pub const Canvas = struct {
 
                         };
 
-                        if (visible.contains(point)) blend(self.at(point), color, bitmap.coverage[row * bitmap.width + column]);
+                        if (visible.contains(point)) blend(self.at(point), color, bitmap.coverage[row * bitmap.width + column] * alpha);
 
                     }
 
@@ -271,6 +376,43 @@ pub const Canvas = struct {
 
     }
 
+    /// Draws premultiplied 0xAARRGGBB `source` stretched over `area`, sampling the nearest pixel.
+    pub fn image(self: *Canvas, source: *const Canvas, area: Rect) void {
+
+        const clipped = self.clip(area) orelse return;
+        if (source.width == 0 or source.height == 0) return;
+
+        for (clipped.top..clipped.bottom) |y| {
+
+            const row = @divTrunc((@as(i64, @intCast(y)) - area.y) * @as(i64, @intCast(source.height)), area.height);
+            const line = source.pixels[@as(usize, @intCast(row)) * source.width ..][0..source.width];
+
+            for (clipped.left..clipped.right) |x| {
+
+                const column = @divTrunc((@as(i64, @intCast(x)) - area.x) * @as(i64, @intCast(source.width)), area.width);
+                const pixel = line[@intCast(column)];
+                const target = &self.pixels[y * self.width + x];
+                const keep = 255 - (pixel >> 24);
+
+                if (keep == 0) {
+
+                    target.* = pixel & 0xffffff;
+                    continue;
+
+                }
+
+                var result: u32 = 0;
+
+                for ([_]u5{ 0, 8, 16 }) |shift| result |= @as(u32, @min((pixel >> shift & 0xff) + (target.* >> shift & 0xff) * keep / 255, 255)) << shift;
+
+                target.* = result;
+
+            }
+
+        }
+
+    }
+
     fn at(self: *Canvas, point: Point) *u32 {
 
         return &self.pixels[@as(usize, @intCast(point.y)) * self.width + @as(usize, @intCast(point.x))];
@@ -307,8 +449,9 @@ pub fn anchor(face: *const font.Font, string: []const u8, size: f32, area: Rect,
 
     const scale = size / face.units;
     const span: i32 = @intFromFloat(@ceil(face.measure(string, scale)));
-    const height: i32 = @intFromFloat(@as(f32, @floatFromInt(face.ascent + face.descent)) * scale);
+    const height = @as(f32, @floatFromInt(face.capital)) * scale;
 
+    // Capitals, or a whole icon, sit midway down the area.
     return .{
 
         .x = switch (alignment) {
@@ -318,7 +461,7 @@ pub fn anchor(face: *const font.Font, string: []const u8, size: f32, area: Rect,
             .right => area.right() - span,
 
         },
-        .y = area.y + @divTrunc(area.height + height, 2),
+        .y = area.y + @as(i32, @intFromFloat(@round((@as(f32, @floatFromInt(area.height)) + height) / 2))),
 
     };
 

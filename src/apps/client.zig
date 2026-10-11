@@ -126,7 +126,7 @@ fn run() !void {
 /// Opens a window through the toolkit and checks the window manager's rules against it.
 fn desktop() !void {
 
-    try refused(api.launch("notes"), error.Denied);
+    try refused(api.launch("editor", ""), error.Denied);
 
     var bytes: [16]u8 = undefined;
     var text = gui.Text{
@@ -149,7 +149,7 @@ fn desktop() !void {
     _ = window.next(1);
     try expect(window.surface.attached);
 
-    const display = &window.surface.display;
+    const display = gui.display;
     const id = window.surface.id;
     var spec = window.surface.spec;
 

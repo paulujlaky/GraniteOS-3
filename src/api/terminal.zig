@@ -2,14 +2,18 @@ const std = @import("std");
 
 const api = @import("root.zig");
 
+/// A shell's terminal: the serial service, or the graphical terminal that launched the shell.
 pub const Terminal = struct {
 
     supervisor: u64,
     endpoint: u64 = 0,
 
+    /// The graphical terminal to talk to instead of the serial service; zero for serial.
+    host: u64 = 0,
+
     pub fn request(self: *Terminal, operation: api.protocol.Operation, value: u56) api.ApiError!u64 {
 
-        if (self.endpoint == 0) self.endpoint = try api.lookup(self.supervisor, .serial);
+        if (self.endpoint == 0) self.endpoint = if (self.host != 0) self.host else try api.lookup(self.supervisor, .serial);
 
         return api.call(self.endpoint, api.protocol.pack(operation, value)) catch |err| {
 
@@ -20,8 +24,10 @@ pub const Terminal = struct {
 
     }
 
-    /// Sends up to seven bytes per message; NUL bytes are dropped because they end a chunk.
+    /// Serial gets up to seven bytes per message, with NUL bytes dropped; a graphical host reads whole windows.
     pub fn write(self: *Terminal, bytes: []const u8) api.ApiError!void {
+
+        if (self.host != 0) return self.lend(bytes);
 
         var chunk: u56 = 0;
         var count: u6 = 0;
@@ -49,6 +55,21 @@ pub const Terminal = struct {
         }
 
         if (count != 0) try self.flush(chunk);
+
+    }
+
+    fn lend(self: *Terminal, bytes: []const u8) api.ApiError!void {
+
+        var offset: usize = 0;
+
+        while (offset < bytes.len) {
+
+            const size = @min(bytes.len - offset, 4096);
+
+            if (try api.exchange(self.host, api.protocol.pack(.write, size), @constCast(bytes[offset..][0..size])) != 0) return error.Invalid;
+            offset += size;
+
+        }
 
     }
 

@@ -27,12 +27,16 @@ pub var ticks: u64 = 0;
 pub var runtime: u64 = 0;
 pub var efi: ?boot.Region = null;
 
+/// Local time in seconds since 1970 when the loader read the firmware clock; `ticks` counts on from there.
+pub var epoch: u64 = 0;
+
 pub fn start(info: *const boot.Info, output: Log) !noreturn {
 
     log = output;
     framebuffer = info.framebuffer;
     runtime = info.runtime;
     efi = info.efi;
+    epoch = info.clock;
     if (info.version != 3 or info.memory.len == 0) return error.InvalidBootInfo;
 
     log.line("start");

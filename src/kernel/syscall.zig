@@ -35,7 +35,8 @@ pub fn handle(task: *process.Process, ticks: u64) void {
 
 }
 
-fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) CallError!void {
+// Kept out of line, so a failure address names the system call rather than the dispatcher.
+noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) CallError!void {
 
     const number = frame.number;
 
@@ -151,6 +152,59 @@ fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) CallError!voi
             frame.first = ticks;
 
         },
+        .clock => {
+
+            if (!task.policy.permits(.time)) return error.Denied;
+
+            // ponytail: counting on from one firmware reading drifts with the timer's calibration; resync from the RTC if that matters.
+            frame.first = root.epoch + ticks / 100;
+
+        },
+        .stats => {
+
+            if (!task.policy.permits(.time)) return error.Denied;
+            // Typed, since @min against a constant narrows to the smallest type holding it, and the size below would overflow.
+            const capacity: u64 = @min(frame.third, 4096);
+
+            if (capacity != 0 and (frame.second < paging.user_base or frame.second >= paging.user_end or capacity * @sizeOf(abi.Usage) > paging.user_end - frame.second)) return error.Invalid;
+
+            var summary = abi.Summary{
+
+                .pages = root.frames.total,
+                .free = root.frames.free_count,
+                .processors = arch.machine.core_count,
+                .uptime = ticks,
+
+            };
+            var cores = arch.machine.cores;
+
+            while (cores) |core| : (cores = core.next) {
+
+                summary.busy +|= core.preemptions;
+                summary.idle +|= core.ticks -| core.preemptions;
+
+            }
+
+            var current = root.processes;
+
+            while (current) |entry| : (current = entry.next) {
+
+                if (entry.state == .dead) continue;
+                summary.processes += 1;
+                if (summary.records == capacity) continue;
+
+                var record = entry.usage();
+
+                // Dispatch marks the caller ready only while it handles this call.
+                if (entry == task) record.state = .running;
+                try copyUser(task, frame.second + summary.records * @sizeOf(abi.Usage), std.mem.asBytes(&record), true);
+                summary.records += 1;
+
+            }
+
+            try copyUser(task, frame.first, std.mem.asBytes(&summary), true);
+
+        },
         .identity => frame.first = task.id,
         .owner => frame.first = task.owner,
         .call => {
@@ -189,7 +243,7 @@ fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) CallError!voi
 
                 if (client.state != .replying or client.destination != task.id or client.ticket != frame.fourth) return error.Denied;
                 if (client.policy.layer != .application or client.identity.user == abi.nobody.user or client.identity.user == abi.system.user) return error.Denied;
-                if (!service.application(image)) return error.Invalid;
+                if (!image.application()) return error.Invalid;
 
             }
 

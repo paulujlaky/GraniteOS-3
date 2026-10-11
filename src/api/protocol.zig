@@ -41,6 +41,16 @@ pub const Operation = enum(u8) {
     launch,
     end,
     mode,
+    argument,
+    windows,
+    activate,
+    reserve,
+    image,
+    forget,
+    clipboard,
+    capture,
+    rename,
+    reload,
     _,
 
 };

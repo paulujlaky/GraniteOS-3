@@ -3,6 +3,7 @@ const std = @import("std");
 const boot = @import("../info.zig");
 const memory = @import("map.zig");
 const graphics = @import("graphics.zig");
+const clock = @import("clock.zig");
 const Log = @import("../../debug/log.zig").Log;
 
 const uefi = std.os.uefi;
@@ -52,6 +53,7 @@ pub fn prepare(log: Log) !*const boot.Info {
         .trampoline = @intFromPtr(trampoline.ptr),
         .runtime = @intFromPtr(table.runtime_services),
         .efi = copy(services, loaded),
+        .clock = clock.capture(table.runtime_services),
 
     };
 

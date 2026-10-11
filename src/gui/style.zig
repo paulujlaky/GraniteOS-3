@@ -1,4 +1,5 @@
 const canvas = @import("canvas.zig");
+const font = @import("font.zig");
 const theme = @import("theme.zig");
 
 pub const Alignment = canvas.Alignment;
@@ -7,6 +8,9 @@ pub const Direction = enum {
 
     column,
     row,
+
+    /// Every child fills the container, each drawn over the last.
+    stack,
 
 };
 
@@ -107,12 +111,16 @@ pub const Style = struct {
     justify: Align = .start,
     items: Align = .stretch,
 
+    /// Lets children run past the container along its main axis, scrolled into view by the wheel and focus.
+    scroll: bool = false,
+
     background: ?u32 = null,
     color: u32 = theme.text,
     border: ?u32 = null,
     border_width: i32 = 0,
     radius: i32 = 0,
 
+    face: font.Face = .sans,
     size: f32 = theme.body,
     text_align: Alignment = .left,
 
@@ -128,11 +136,7 @@ pub const Style = struct {
     /// This style with the fields of struct `changes` replaced, like an inline style over a class.
     pub fn with(self: Style, changes: anytype) Style {
 
-        var result = self;
-
-        inline for (@typeInfo(@TypeOf(changes)).@"struct".fields) |field| @field(result, field.name) = @field(changes, field.name);
-
-        return result;
+        return merge(Style, self, changes);
 
     }
 
@@ -158,6 +162,27 @@ pub const Style = struct {
     }
 
 };
+
+/// `base` with the fields `changes` names replaced, reaching into nested structs such as `Paint` and `Edges`.
+fn merge(comptime T: type, base: T, changes: anytype) T {
+
+    const Changes = @TypeOf(changes);
+
+    if (Changes == T or @typeInfo(T) != .@"struct" or @typeInfo(Changes) != .@"struct") return changes;
+
+    var result = base;
+
+    inline for (@typeInfo(Changes).@"struct".fields) |field| {
+
+        const Field = @TypeOf(@field(result, field.name));
+
+        @field(result, field.name) = merge(Field, @field(result, field.name), @field(changes, field.name));
+
+    }
+
+    return result;
+
+}
 
 pub const State = struct {
 
