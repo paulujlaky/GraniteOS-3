@@ -39,6 +39,27 @@ pub const Options = packed struct(u8) {
 
 };
 
+/// How a surface comes onto and leaves the screen; the display animates it on the GPU, and shows it at once without one.
+pub const Motion = enum(u8) {
+
+    /// Windows zoom; other layers, and surfaces filling the screen, show at once.
+    auto,
+    none,
+
+    /// Fades while growing slightly into place.
+    zoom,
+
+    /// Fades while sliding down into place, like a menu hanging from a bar.
+    drop,
+
+    /// Fades while sliding up into place, like a sheet rising from a dock.
+    rise,
+
+    fade,
+    _,
+
+};
+
 /// How a surface asks to be shown: `area` is its content in screen coordinates.
 pub const Spec = extern struct {
 
@@ -48,6 +69,7 @@ pub const Spec = extern struct {
 
     /// The app it belongs to as an `abi.Image` index, so the session can group windows; `none` otherwise.
     application: u8 = none,
+    motion: Motion = .auto,
     length: u8 = 0,
     title: [64]u8 = undefined,
 

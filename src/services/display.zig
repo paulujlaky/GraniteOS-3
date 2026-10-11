@@ -2,6 +2,7 @@ const std = @import("std");
 
 const svga = @import("svga.zig");
 const gpu = @import("gpu.zig");
+const motion = @import("motion.zig");
 
 const api = @import("api");
 const gui = @import("gui");
@@ -168,6 +169,17 @@ const Surface = struct {
     /// Where a maximised window goes back to.
     restore: gui.Rect = .{},
 
+    /// How it comes and goes, the transition it is in, if any, and the pose it shows in.
+    effect: api.display.Motion = .auto,
+    transition: ?motion.Transition = null,
+    pose: motion.Pose = .rest,
+
+    /// The screen it covered when last drawn in transition.
+    painted: gui.Rect = .{},
+
+    /// Closed by its client, and only showing until its leaving transition ends.
+    leaving: bool = false,
+
     fn decorated(self: *const Surface) bool {
 
         return self.layer == .window;
@@ -203,9 +215,26 @@ const Surface = struct {
 
     }
 
+    /// Showing and taking input.
     fn visible(self: *const Surface) bool {
 
-        return self.client != 0 and self.shown and !self.minimized;
+        return self.client != 0 and self.shown and !self.minimized and !self.leaving;
+
+    }
+
+    /// On the screen, if only for the rest of a transition.
+    fn drawn(self: *const Surface) bool {
+
+        return self.client != 0 and self.shown and (!self.minimized or self.transition != null);
+
+    }
+
+    /// Its motion, with `auto` settled: windows zoom, and everything else shows at once.
+    fn movement(self: *const Surface) api.display.Motion {
+
+        if (self.effect != .auto) return self.effect;
+
+        return if (self.decorated() and !self.options.fill) .zoom else .none;
 
     }
 
@@ -396,9 +425,17 @@ pub export fn app_main(_: usize, base: usize, environment: *const api.abi.Enviro
     while (true) {
 
         // Everything the last request changed draws once, after its answer let the client carry on.
+        const moving = animate();
+
         redraw();
 
-        const request = api.receive(true) catch continue;
+        // While something moves, waiting for a request must not stall its next pose, a tick away.
+        const request = api.receive(!moving) catch {
+
+            if (moving) api.sleep(1);
+            continue;
+
+        };
 
         if (respond(request)) |result| api.reply(request, result) catch {
 
@@ -580,7 +617,9 @@ fn settle() void {
 
     for (&surfaces, 0..) |*surface, index| {
 
-        if (surface.client == 0) continue;
+        // Transitions were drawn for the old screen, so they end at once.
+        if (surface.transition != null) conclude(index);
+        if (surface.client == 0 or surface.leaving) continue;
 
         if (surface.options.fill) {
 
@@ -698,6 +737,7 @@ fn attach(request: api.Request, region: u64) u64 {
         .layer = spec.layer,
         .options = spec.options,
         .application = spec.application,
+        .effect = spec.motion,
 
     };
     name(surface, spec);
@@ -746,6 +786,7 @@ fn place(request: api.Request, id: u64) u64 {
 
     surface.area = area;
     surface.layer = spec.layer;
+    surface.effect = spec.motion;
     name(surface, spec);
     remove(index);
     insert(index);
@@ -767,7 +808,15 @@ fn present(request: api.Request, value: u64) u64 {
 
     surface.half = @intCast(value >> 8 & 1);
     surface.size = length;
-    surface.shown = true;
+
+    // A surface's first frame plays it in.
+    if (!surface.shown) {
+
+        surface.shown = true;
+        if (motion.away(surface.movement())) |away| _ = begin(@intCast(value & 0xff), .enter, away.pose, .rest, away.length);
+
+    }
+
     if (!surface.minimized) compose(surface.footprint());
 
     return 0;
@@ -795,7 +844,7 @@ fn windows(request: api.Request) u64 {
     for (stack[0..depth]) |index| {
 
         const surface = &surfaces[index];
-        if (!surface.decorated()) continue;
+        if (!surface.decorated() or surface.leaving) continue;
 
         listed[count] = .{
 
@@ -830,13 +879,20 @@ fn activate(request: api.Request, value: u64) u64 {
     if (request.first != session()) return protocol.denied;
 
     const index = value & 0xffffffff;
-    if (index >= surfaces.len or surfaces[index].client == 0 or !surfaces[index].decorated()) return protocol.invalid;
+    if (index >= surfaces.len or surfaces[index].client == 0 or surfaces[index].leaving or !surfaces[index].decorated()) return protocol.invalid;
 
     switch (std.enums.fromInt(api.display.Action, value >> 32) orelse return protocol.invalid) {
 
         .raise => {
 
-            surfaces[index].minimized = false;
+            // A minimised window flies back from wherever its minimising left it.
+            if (surfaces[index].minimized) {
+
+                surfaces[index].minimized = false;
+                _ = begin(index, .restore, null, .rest, motion.tuck);
+
+            }
+
             raise(index);
             focus(index);
 
@@ -871,7 +927,7 @@ fn reserve(request: api.Request, value: u64) u64 {
 
     for (&surfaces, 0..) |*surface, index| {
 
-        if (surface.client != 0 and surface.maximized) reshape(index, inside(work()));
+        if (surface.client != 0 and surface.maximized and !surface.leaving) reshape(index, inside(work()));
 
     }
 
@@ -991,24 +1047,27 @@ fn redraw() void {
         for (stack[0..depth]) |index| {
 
             const surface = &surfaces[index];
-            if (!surface.visible() or surface.footprint().intersect(visible) == null) continue;
+            if (!surface.drawn()) continue;
 
-            const decorations = trim(index);
+            if (surface.transition != null) {
 
-            drawing = 0;
-            if (surface.footprint().intersect(visible)) |limit| device.render(decorations.commands(), corner(surface.footprint()), limit, texture);
-            drawing = surface.client;
-            if (surface.area.intersect(visible)) |limit| device.render(surface.commands(), corner(surface.area), limit, texture);
+                float(device, index, visible);
+
+            } else if (surface.footprint().intersect(visible)) |limit| {
+
+                layers(device, index, limit);
+
+            }
 
         }
 
-        // The GPU cannot cut to a curve, so the CPU redraws the few pixels at windows' rounded corners and lays them over.
+        // The GPU cannot cut to a curve, so the CPU redraws the few pixels at windows' rounded corners and lays them over; it cannot draw moving surfaces, so none goes near them.
         var count: usize = 0;
 
         for (stack[0..depth]) |index| {
 
             const surface = &surfaces[index];
-            if (!surface.visible() or !surface.decorated()) continue;
+            if (!surface.visible() or !surface.decorated() or surface.transition != null) continue;
 
             const corners = gui.Corners{
 
@@ -1020,6 +1079,7 @@ fn redraw() void {
             for (corners.squares()) |square| {
 
                 patches[count] = square.intersect(visible) orelse continue;
+                if (crowded(patches[count])) continue;
                 paint(patches[count]);
                 count += 1;
 
@@ -1053,7 +1113,74 @@ fn redraw() void {
 
 }
 
-/// Draws `visible` of the screen into the CPU's copy, bottom surface first.
+/// Queues surface `index`'s decorations and content within `limit` on the GPU.
+fn layers(device: *gpu.Gpu, index: usize, limit: gui.Rect) void {
+
+    const surface = &surfaces[index];
+    const decorations = trim(index);
+
+    drawing = 0;
+    device.render(decorations.commands(), corner(surface.footprint()), limit, texture);
+    drawing = surface.client;
+    if (surface.area.intersect(limit)) |inside_limit| device.render(surface.commands(), corner(surface.area), inside_limit, texture);
+
+}
+
+/// Queues surface `index` mid-transition: drawn whole into the GPU's layer, then laid on the frame in its pose.
+fn float(device: *gpu.Gpu, index: usize, visible: gui.Rect) void {
+
+    const surface = &surfaces[index];
+    if (surface.painted.intersect(visible) == null) return;
+
+    const footprint = surface.footprint();
+    const whole = footprint.intersect(back.bounds()) orelse return;
+
+    device.lift(whole);
+    layers(device, index, whole);
+
+    // As `paint` does on the CPU, content is cut to the curve of the frame's bottom corners, and the frame fills in beneath.
+    if (surface.decorated()) {
+
+        const corners = gui.Corners{
+
+            .area = surface.area,
+            .radius = curve,
+
+        };
+        const decorations = trim(index);
+
+        device.cut(surface.area, curve);
+        device.blending(.under);
+        drawing = 0;
+
+        for (corners.squares()) |square| {
+
+            if (square.intersect(whole)) |limit| device.render(decorations.commands(), corner(footprint), limit, texture);
+
+        }
+
+        device.blending(.over);
+
+    }
+
+    device.lower(whole, surface.pose.box(whole, footprint), surface.pose.opacity, visible);
+
+}
+
+/// Whether `area` meets a surface in transition.
+fn crowded(area: gui.Rect) bool {
+
+    for (stack[0..depth]) |index| {
+
+        if (surfaces[index].transition != null and surfaces[index].painted.intersect(area) != null) return true;
+
+    }
+
+    return false;
+
+}
+
+/// Draws `visible` of the screen into the CPU's copy, bottom surface first; surfaces in transition are the GPU's alone.
 fn paint(visible: gui.Rect) void {
 
     back.fill(visible, theme.desktop);
@@ -1061,7 +1188,7 @@ fn paint(visible: gui.Rect) void {
     for (stack[0..depth]) |index| {
 
         const surface = &surfaces[index];
-        if (!surface.visible() or surface.footprint().intersect(visible) == null) continue;
+        if (!surface.visible() or surface.transition != null or surface.footprint().intersect(visible) == null) continue;
 
         const decorations = trim(index);
 
@@ -1142,7 +1269,7 @@ fn route(event: api.Event) void {
 
                 for (stack[0..depth]) |index| {
 
-                    if (surfaces[index].client == owner) return queue(index, event);
+                    if (surfaces[index].client == owner and !surfaces[index].leaving) return queue(index, event);
 
                 }
 
@@ -1488,7 +1615,7 @@ fn minimize(index: usize) void {
 
     surface.minimized = true;
     if (hot != null and hot.?.index == index) hot = null;
-    compose(surface.footprint());
+    if (!begin(index, .minimize, null, motion.shrink(surface.footprint(), dock()), motion.tuck)) compose(surface.footprint());
     if (focused == index) refocus();
     changed = true;
 
@@ -1500,7 +1627,7 @@ fn keyboard() ?usize {
     if (depth == 0) return null;
 
     const top = stack[depth - 1];
-    if (surfaces[top].layer == .overlay) return top;
+    if (surfaces[top].layer == .overlay and !surfaces[top].leaving) return top;
 
     const index = focused orelse return null;
 
@@ -1587,7 +1714,7 @@ fn announce() void {
 
     for (stack[0..depth]) |index| {
 
-        if (surfaces[index].client != owner) continue;
+        if (surfaces[index].client != owner or surfaces[index].leaving) continue;
 
         queue(index, .{
 
@@ -1716,7 +1843,7 @@ fn refocus() void {
         position -= 1;
 
         const surface = &surfaces[stack[position]];
-        if (surface.layer == .window and !surface.minimized) return focus(stack[position]);
+        if (surface.layer == .window and !surface.minimized and !surface.leaving) return focus(stack[position]);
 
     }
 
@@ -1724,20 +1851,23 @@ fn refocus() void {
 
 }
 
+/// Takes surface `index` out of input and focus at once, and off the screen once it has played out, if it moves.
 fn close(index: usize) void {
 
     const surface = &surfaces[index];
-    const area = surface.footprint();
+    if (surface.leaving) return;
 
-    remove(index);
     if (grabbed != null and grabbed.?.index == index) grabbed = null;
     if (hot != null and hot.?.index == index) hot = null;
     if (armed != null and armed.?.index == index) armed = null;
     if (capture == index) capture = null;
     if (hovered == index) hovered = null;
 
-    api.detach(surface.memory.handle);
-    surface.* = .{};
+    // Its client may already be gone, but the display's own hold keeps the commands it last presented.
+    const shown = surface.visible();
+
+    surface.leaving = true;
+    changed = true;
 
     if (focused == index) {
 
@@ -1746,12 +1876,101 @@ fn close(index: usize) void {
 
     }
 
-    changed = true;
-    compose(area);
+    if (shown) if (motion.away(surface.movement())) |away| if (begin(index, .leave, null, away.pose, away.length)) return;
+
+    free(index);
 
 }
 
-/// Forgets everything of client `id`.
+/// Frees the slot of surface `index`, closed and done showing.
+fn free(index: usize) void {
+
+    const surface = &surfaces[index];
+
+    compose(surface.footprint().join(surface.painted));
+    remove(index);
+    api.detach(surface.memory.handle);
+    surface.* = .{};
+
+}
+
+/// Starts surface `index` moving from `from`, or the pose it shows in, to `to`; false, leaving it be, without a GPU to animate it.
+fn begin(index: usize, purpose: motion.Purpose, from: ?motion.Pose, to: motion.Pose, length: u64) bool {
+
+    if (renderer == null) return false;
+
+    const surface = &surfaces[index];
+
+    if (from) |pose| surface.pose = pose;
+    surface.transition = motion.Transition.begin(purpose, surface.pose, to, length);
+    surface.painted = surface.pose.bounds(surface.footprint());
+    compose(surface.painted);
+
+    return true;
+
+}
+
+/// Moves every surface in transition on to its pose for this tick, and ends those done; true while any still moves.
+fn animate() bool {
+
+    const now = api.ticks();
+    var moving = false;
+
+    // By slot rather than by stack, since freeing a surface done leaving restacks.
+    for (&surfaces, 0..) |*surface, index| {
+
+        const current = surface.transition orelse continue;
+
+        if (current.done(now)) {
+
+            conclude(index);
+            continue;
+
+        }
+
+        const pose = current.pose(now);
+        const area = pose.bounds(surface.footprint());
+
+        moving = true;
+        if (std.meta.eql(pose, surface.pose) and std.meta.eql(area, surface.painted)) continue;
+
+        compose(surface.painted.join(area));
+        surface.pose = pose;
+        surface.painted = area;
+
+    }
+
+    return moving;
+
+}
+
+/// Ends surface `index`'s transition where it was headed; one leaving is freed.
+fn conclude(index: usize) void {
+
+    const surface = &surfaces[index];
+    const current = surface.transition orelse return;
+
+    surface.transition = null;
+    surface.pose = current.to;
+    compose(surface.painted.join(surface.footprint()));
+
+    if (current.purpose == .leave) free(index);
+
+}
+
+/// Where minimised windows fly to: the middle of the row the session keeps at the bottom for its dock.
+fn dock() gui.Point {
+
+    return .{
+
+        .x = @divTrunc(@as(i32, @intCast(back.width)), 2),
+        .y = @as(i32, @intCast(back.height)) - @divTrunc(reserved[1], 2),
+
+    };
+
+}
+
+/// Forgets everything of client `id`; its surfaces still leaving play out.
 fn drop(id: u64) void {
 
     for (&surfaces, 0..) |*surface, index| {
@@ -2025,7 +2244,7 @@ fn arrival(area: gui.Rect) gui.Rect {
 
     for (surfaces) |surface| {
 
-        if (surface.client != 0 and surface.decorated()) count += 1;
+        if (surface.client != 0 and surface.decorated() and !surface.leaving) count += 1;
 
     }
 
@@ -2149,7 +2368,7 @@ fn owned(request: api.Request, id: u64) ?*Surface {
 
     const surface = &surfaces[id];
 
-    return if (surface.client != 0 and surface.client == request.first) surface else null;
+    return if (surface.client != 0 and surface.client == request.first and !surface.leaving) surface else null;
 
 }
 

@@ -75,8 +75,11 @@ const blend_equation = 34;
 const cull_mode = 35;
 const smooth = 2;
 const cull_none = 1;
+const zero = 1;
 const one = 2;
+const source_alpha = 5;
 const inverse_source_alpha = 6;
+const inverse_target_alpha = 8;
 const add = 1;
 
 // Texture states and their values.
@@ -129,8 +132,11 @@ const state = 5;
 /// Where quads land; finished areas are copied to `frame`, so the host never shows one half drawn.
 const canvas = 6;
 
+/// Where a moving surface is drawn whole, with transparency, before landing on `canvas` scaled and faded.
+const layer = 7;
+
 /// Clients' images, each a texture of its own, follow the fixed objects.
-const pictures = 7;
+const pictures = 8;
 pub const textures = 48;
 const objects = pictures + textures;
 
@@ -242,6 +248,8 @@ pub const Gpu = struct {
 
     fn setup(device: *svga.Device, width: u32, height: u32) !?Gpu {
 
+        // A new atlas starts blank, so shapes cached for the last one, such as before a mode switch, are gone.
+        @memset(&slots, .{});
         @memset(&defined, .{ 0, 0 });
 
         for (&copies) |*copy| if (copy.*) |memory| {
@@ -276,6 +284,7 @@ pub const Gpu = struct {
         _ = try gpu.reserve(state, state_pages);
         _ = try gpu.reserve(frame, (width * height * 4 + 4095) / 4096);
         _ = try gpu.reserve(canvas, (width * height * 4 + 4095) / 4096);
+        _ = try gpu.reserve(layer, (width * height * 4 + 4095) / 4096);
         gpu.readback = try gpu.reserve(result, 1);
 
         const program = try gpu.reserve(code, 1);
@@ -288,6 +297,7 @@ pub const Gpu = struct {
 
         gpu.surface(frame, texture_hint | target_hint | scanout, x8r8g8b8, width, height);
         gpu.surface(canvas, texture_hint | target_hint, x8r8g8b8, width, height);
+        gpu.surface(layer, texture_hint | target_hint, a8r8g8b8, width, height);
         gpu.surface(vertices, vertex_hint, buffer, vertex_pages * 4096, 1);
         gpu.surface(atlas, texture_hint, a8r8g8b8, atlas_size, atlas_size);
         gpu.surface(result, target_hint, x8r8g8b8, 4, 4);
@@ -553,6 +563,103 @@ pub const Gpu = struct {
 
     }
 
+    /// How quads mix with what lies under them.
+    pub const Blend = enum {
+
+        /// Over it: the usual.
+        over,
+
+        /// Under it, showing only where it is still transparent.
+        under,
+
+        /// Keeping it only as far as the quad covers it.
+        mask,
+
+    };
+
+    pub fn blending(self: *Gpu, mode: Blend) void {
+
+        const factors: [2]u32 = switch (mode) {
+
+            .over => .{ one, inverse_source_alpha },
+            .under => .{ inverse_target_alpha, one },
+            .mask => .{ zero, source_alpha },
+
+        };
+
+        self.flush();
+        self.device.submit(set_render_state, &.{ context, source_blend, factors[0], target_blend, factors[1] });
+
+    }
+
+    /// Sends what follows to the layer, cleared to transparent over `area`, until `lower` lays it on the frame.
+    pub fn lift(self: *Gpu, area: gui.Rect) void {
+
+        self.flush();
+        self.device.submit(set_render_target, &.{ context, color0, layer, 0, 0 });
+        self.device.submit(clear, &.{ context, clear_color, 0, @bitCast(@as(f32, 1)), 0, @intCast(area.x), @intCast(area.y), @intCast(area.width), @intCast(area.height) });
+
+    }
+
+    /// Rounds off the bottom corners of `area`, drawn in the layer, to `radius`, clearing what lies outside the curve.
+    pub fn cut(self: *Gpu, area: gui.Rect, radius: i32) void {
+
+        const corners = gui.Corners{
+
+            .area = area,
+            .radius = radius,
+
+        };
+        const squares = corners.squares();
+        if (squares[0].width <= 0 or squares[0].width > largest_corner) return;
+
+        const slot = self.corner(@intCast(squares[0].width)) orelse return;
+
+        self.blending(.mask);
+        for (squares, [_]bool{ false, true }) |square, right| self.quad(square, slot, right, true, 0xffffff, square);
+        self.blending(.over);
+
+    }
+
+    /// Goes back to drawing on the frame, and lays `area` of the layer over `box` (left, top, right, bottom), faded to `opacity`, within `clip`.
+    pub fn lower(self: *Gpu, area: gui.Rect, box: [4]f32, opacity: f32, clip: gui.Rect) void {
+
+        self.flush();
+        self.device.submit(set_render_target, &.{ context, color0, canvas, 0, 0 });
+
+        const left = @max(box[0], @as(f32, @floatFromInt(clip.x)));
+        const top = @max(box[1], @as(f32, @floatFromInt(clip.y)));
+        const right = @min(box[2], @as(f32, @floatFromInt(clip.right())));
+        const bottom = @min(box[3], @as(f32, @floatFromInt(clip.bottom())));
+
+        if (right <= left or bottom <= top) return;
+
+        const across = (box[2] - box[0]) / @as(f32, @floatFromInt(area.width));
+        const down = (box[3] - box[1]) / @as(f32, @floatFromInt(area.height));
+        const columns: f32 = @floatFromInt(self.width);
+        const rows: f32 = @floatFromInt(self.height);
+        const x: f32 = @floatFromInt(area.x);
+        const y: f32 = @floatFromInt(area.y);
+        const level: u32 = @intFromFloat(std.math.clamp(opacity, 0, 1) * 255 + 0.5);
+
+        // The layer holds premultiplied colour, so fading scales every channel alike.
+        self.sample(layer, linear);
+        self.stretch(.{ left, top, right, bottom }, .{
+
+            (x + (left - box[0]) / across) / columns,
+            (x + (right - box[0]) / across) / columns,
+
+        }, .{
+
+            (y + (top - box[1]) / down) / rows,
+            (y + (bottom - box[1]) / down) / rows,
+
+        }, level * 0x01010101);
+        self.flush();
+        self.sample(atlas, nearest);
+
+    }
+
     /// Fills `area` with anti-aliased corners, as a solid cross and four corner masks.
     fn rounded(self: *Gpu, area: gui.Rect, radius: i32, color: u32, clip: gui.Rect) void {
 
@@ -709,6 +816,13 @@ pub const Gpu = struct {
     /// Stages one quad covering `visible`, sampling from `u` and `v`, tinted by premultiplied `tinted`.
     fn stage(self: *Gpu, visible: gui.Rect, u: [2]f32, v: [2]f32, tinted: u32) void {
 
+        self.stretch(.{ @floatFromInt(visible.x), @floatFromInt(visible.y), @floatFromInt(visible.right()), @floatFromInt(visible.bottom()) }, u, v, tinted);
+
+    }
+
+    /// Stages one quad between pixel edges `box`, as left, top, right, and bottom, which may fall between pixels.
+    fn stretch(self: *Gpu, box: [4]f32, u: [2]f32, v: [2]f32, tinted: u32) void {
+
         if (self.count == quads) self.flush();
 
         // The device may still be copying the last batch out of the staging memory.
@@ -719,10 +833,10 @@ pub const Gpu = struct {
 
         }
 
-        const left = edge(visible.x, self.columns, self.shift);
-        const right = edge(visible.right(), self.columns, self.shift);
-        const top = -edge(visible.y, self.rows, self.shift);
-        const bottom = -edge(visible.bottom(), self.rows, self.shift);
+        const left = edge(box[0], self.columns, self.shift);
+        const right = edge(box[2], self.columns, self.shift);
+        const top = -edge(box[1], self.rows, self.shift);
+        const bottom = -edge(box[3], self.rows, self.shift);
         const staged: *[6]Vertex = @ptrCast(@alignCast(self.vertices.bytes[self.count * quad_bytes ..][0..quad_bytes]));
 
         staged.* = .{
@@ -1112,9 +1226,9 @@ const Paging = struct {
 };
 
 /// The clip-space position of pixel edge `edge` along a `span`-pixel axis.
-pub fn edge(at: i32, span: u32, shift: f32) f32 {
+pub fn edge(at: f32, span: u32, shift: f32) f32 {
 
-    return (@as(f32, @floatFromInt(at)) - shift) * 2 / @as(f32, @floatFromInt(span)) - 1;
+    return (at - shift) * 2 / @as(f32, @floatFromInt(span)) - 1;
 
 }
 

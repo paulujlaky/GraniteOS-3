@@ -25,6 +25,7 @@ pub const Node = @import("node.zig").Node;
 pub const Text = @import("text.zig").Text;
 pub const leading = @import("text.zig").leading;
 pub const Image = @import("image.zig").Image;
+pub const Graph = @import("graph.zig").Graph;
 pub const Prompt = @import("prompt.zig").Prompt;
 
 pub const Surface = @import("surface.zig").Surface;
@@ -141,6 +142,17 @@ pub fn picture(shown: *Image, look: Style) Node {
         },
 
     };
+
+}
+
+/// A node showing `shown`, a graph the app keeps; refresh the window after changing its values.
+pub fn chart(shown: *Graph, look: Style) Node {
+
+    var result = custom(&Graph.recorder, look);
+
+    result.data = @intFromPtr(shown);
+
+    return result;
 
 }
 

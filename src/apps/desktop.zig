@@ -335,6 +335,7 @@ pub fn init() void {
         .width = 440,
         .height = 420,
         .hidden = true,
+        .motion = .drop,
 
     }) catch api.exit(3);
     menu = gui.Window.open(&menu_root, .{
@@ -343,6 +344,7 @@ pub fn init() void {
         .width = 200,
         .height = @intCast(choices.len * 34 + 12 + (choices.len - 1) * 2),
         .hidden = true,
+        .motion = .drop,
 
     }) catch api.exit(3);
 

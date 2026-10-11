@@ -30,13 +30,14 @@ const Card = struct {
     title: gui.Node,
     value: gui.Node,
     detail: gui.Node,
+    plot: gui.Graph,
     graph: gui.Node,
     parts: [4]*gui.Node,
     node: gui.Node,
     bytes: [32]u8 = undefined,
     detail_bytes: [64]u8 = undefined,
 
-    fn init(self: *Card, heading_text: []const u8, record: *const fn (*gui.Node, *gui.List) void) void {
+    fn init(self: *Card, heading_text: []const u8, history: *const [span]f32) void {
 
         self.title = gui.label(heading_text, theme.caption);
         self.value = gui.label("", .{
@@ -45,9 +46,14 @@ const Card = struct {
 
         });
         self.detail = gui.label("", theme.caption);
-        self.graph = gui.custom(record, .{
+        self.plot = .{
 
-            .height = 72,
+            .values = history,
+
+        };
+        self.graph = gui.chart(&self.plot, .{
+
+            .height = 112,
 
         });
         self.parts = .{ &self.title, &self.value, &self.detail, &self.graph };
@@ -119,8 +125,8 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
     api.start(environment, .application);
 
-    processor.init("Processors", &drawProcessor);
-    memory.init("Memory", &drawMemory);
+    processor.init("Processors", &processor_history);
+    memory.init("Memory", &memory_history);
     card_parts = .{ &processor.node, &memory.node };
     cards.content.box = &card_parts;
 
@@ -204,6 +210,14 @@ fn sample() void {
     const share = if (total == 0) 0 else @as(f32, @floatFromInt(busy)) / @as(f32, @floatFromInt(total));
     const used = summary.pages - summary.free;
     const fraction = @as(f32, @floatFromInt(used)) / @as(f32, @floatFromInt(@max(summary.pages, 1)));
+
+    // The first reading stands for the time before the window opened, so the graphs do not climb from nothing.
+    if (previous.uptime == 0) {
+
+        @memset(&processor_history, std.math.clamp(share, 0, 1));
+        @memset(&memory_history, std.math.clamp(fraction, 0, 1));
+
+    }
 
     push(&processor_history, share);
     push(&memory_history, fraction);
@@ -309,43 +323,5 @@ fn push(history: *[span]f32, value: f32) void {
 
     std.mem.copyForwards(f32, history[0 .. span - 1], history[1..]);
     history[span - 1] = std.math.clamp(value, 0, 1);
-
-}
-
-fn drawProcessor(node: *gui.Node, target: *gui.List) void {
-
-    graph(node.rect, &processor_history, target);
-
-}
-
-fn drawMemory(node: *gui.Node, target: *gui.List) void {
-
-    graph(node.rect, &memory_history, target);
-
-}
-
-/// Bars for each second of `history`, rising from the bottom of `area`.
-fn graph(area: gui.Rect, history: *const [span]f32, target: *gui.List) void {
-
-    target.round(area, theme.radius, theme.background);
-
-    const width = @divTrunc(area.width, span);
-    const left = area.x + area.width - width * span;
-
-    for (history, 0..) |value, index| {
-
-        const height: i32 = @intFromFloat(value * @as(f32, @floatFromInt(area.height - 4)));
-        if (height <= 0) continue;
-
-        target.fill(.{
-
-            .x = left + @as(i32, @intCast(index)) * width,
-            .y = area.bottom() - 2 - height,
-            .width = @max(width - 1, 1),
-            .height = height,
-
-        }, if (index == span - 1) theme.accent else theme.faint);
-
-    }
 
 }

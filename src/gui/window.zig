@@ -48,6 +48,9 @@ pub const Options = struct {
     /// Starts off the screen until `show`.
     hidden: bool = false,
 
+    /// How it animates as it shows and hides.
+    motion: api.display.Motion = .auto,
+
     /// Bytes for each half of the command buffer.
     capacity: usize = draw.capacity,
 
@@ -114,6 +117,7 @@ pub const Window = struct {
         };
 
         if (options.application) |application| spec.application = @intCast(@intFromEnum(application));
+        spec.motion = options.motion;
 
         var window = Window{
 
