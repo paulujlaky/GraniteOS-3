@@ -42,9 +42,6 @@ const avatar = gui.Style{
 
 };
 
-const months = [_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
-const days = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
-
 var greeter: gui.Window = undefined;
 var accounts = api.Accounts{};
 var state = State.choose;
@@ -212,14 +209,17 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     sync();
 
     const surfaces = desktop.windows();
-    const all = [_]*gui.Window{ surfaces[0], surfaces[1], surfaces[2], surfaces[3], surfaces[4], &greeter };
+    var all: [16]*gui.Window = undefined;
+
+    @memcpy(all[0..surfaces.len], surfaces);
+    all[surfaces.len] = &greeter;
 
     while (true) {
 
         tick();
         desktop.tick();
 
-        if (gui.wait(&all, 50)) |input| {
+        if (gui.wait(all[0 .. surfaces.len + 1], 50)) |input| {
 
             if (!desktop.react(input)) react(input.event);
 
@@ -321,7 +321,7 @@ fn tick() void {
 
     minute = now / 60;
     time.content.label = std.fmt.bufPrint(&time_bytes, "{d:0>2}:{d:0>2}", .{ today.hour, today.minute }) catch "";
-    date.content.label = std.fmt.bufPrint(&date_bytes, "{s}, {d} {s}", .{ days[today.weekday], today.day, months[today.month - 1] }) catch "";
+    date.content.label = std.fmt.bufPrint(&date_bytes, "{s}, {d} {s}", .{ api.time.days[today.weekday], today.day, api.time.months[today.month - 1] }) catch "";
     greeter.refresh();
 
 }

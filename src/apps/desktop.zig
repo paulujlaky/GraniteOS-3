@@ -1,8 +1,13 @@
-//! The signed-in desktop: wallpaper, top bar, dock, app launcher, and session menu, all surfaces of the login process.
+//! The signed-in desktop: wallpaper, top bar, dock, app launcher, menus, notifications, window switcher, and clipboard history, all surfaces of the login process.
 
 const std = @import("std");
 
+const about = @import("about.zig");
 const catalog = @import("catalog.zig");
+const clips = @import("clips.zig");
+const menu = @import("menu.zig");
+const notices = @import("notices.zig");
+const switcher = @import("switcher.zig");
 
 const api = @import("api");
 const gui = @import("gui");
@@ -15,9 +20,6 @@ const theme = gui.theme;
 const height = 30;
 const slot = 46;
 const margin = 8;
-
-const days = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-const months = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 
 const glass = gui.shade(0x101010, 232);
 
@@ -48,23 +50,13 @@ const chip = gui.Style{
 
 };
 
-const popup = gui.Style{
-
-    .padding = .all(6),
-    .gap = 2,
-
-    .background = theme.raised,
-    .border = theme.line,
-    .border_width = theme.border,
-    .radius = theme.corner,
-
-};
-
 pub var wallpaper: gui.Window = undefined;
 var bar: gui.Window = undefined;
 var dock: gui.Window = undefined;
 var launcher: gui.Window = undefined;
-var menu: gui.Window = undefined;
+
+/// Every surface of the desktop, for the event loop.
+var surfaces: [10]*gui.Window = undefined;
 
 /// The picture behind everything, shared with the lock screen.
 pub var backdrop: gui.Image = undefined;
@@ -164,37 +156,31 @@ var list = gui.box(.{
 
 }, &list_parts);
 var launcher_parts = [_]*gui.Node{ &search, &list };
-var launcher_root = gui.box(popup.with(.{
+var launcher_root = gui.box(menu.popup.with(.{
 
     .padding = gui.Edges.all(theme.spacing),
     .gap = 10,
 
 }), &launcher_parts);
 
-// Session menu.
-const Choice = struct {
-
-    icon: gui.Icon,
-    title: []const u8,
-    run: *const fn () void,
-
-};
-
-const choices = [_]Choice{
+/// The session menu under the account name, and the wallpaper's right-click menu.
+var account_menu: menu.Menu(&.{
 
     .{ .icon = .lock, .title = "Lock", .run = session.lock },
     .{ .icon = .logout, .title = "Log out", .run = session.logout },
     .{ .icon = .restart, .title = "Restart", .run = restart },
     .{ .icon = .power, .title = "Shut down", .run = shutdown },
 
-};
+}) = .{};
+var desktop_menu: menu.Menu(&.{
 
-var choice_icons: [choices.len]gui.Node = undefined;
-var choice_labels: [choices.len]gui.Node = undefined;
-var choice_parts: [choices.len][2]*gui.Node = undefined;
-var choice_rows: [choices.len]gui.Node = undefined;
-var menu_parts: [choices.len]*gui.Node = undefined;
-var menu_root = gui.box(popup, &menu_parts);
+    .{ .icon = .folder, .title = "Files", .run = files_open },
+    .{ .icon = .terminal, .title = "Terminal", .run = terminal_open },
+    .{ .icon = .wallpaper, .title = "Change wallpaper", .run = settings_open },
+    .{ .icon = .image, .title = "Take screenshot", .run = screenshot },
+    .{ .icon = .info, .title = "About GraniteOS", .run = about_open },
+
+}) = .{};
 
 var listed: [64]api.display.Window = undefined;
 var count: usize = 0;
@@ -276,18 +262,6 @@ pub fn init() void {
 
     }
 
-    for (choices, 0..) |choice, index| {
-
-        choice_icons[index] = gui.icon(choice.icon, theme.icon);
-        choice_labels[index] = gui.label(choice.title, .{});
-        choice_parts[index] = .{ &choice_icons[index], &choice_labels[index] };
-        choice_rows[index] = gui.box(theme.item, &choice_parts[index]);
-        choice_rows[index].action = &choose;
-        choice_rows[index].data = index;
-        menu_parts[index] = &choice_rows[index];
-
-    }
-
     apps.action = &toggle;
     user.action = &reveal;
     search.action = &first;
@@ -338,24 +312,22 @@ pub fn init() void {
         .motion = .drop,
 
     }) catch api.exit(3);
-    menu = gui.Window.open(&menu_root, .{
-
-        .layer = .panel,
-        .width = 200,
-        .height = @intCast(choices.len * 34 + 12 + (choices.len - 1) * 2),
-        .hidden = true,
-        .motion = .drop,
-
-    }) catch api.exit(3);
+    account_menu.init();
+    desktop_menu.init();
+    notices.init(screen, height);
+    switcher.init(screen);
+    clips.init(screen);
+    about.init();
+    surfaces = .{ &wallpaper, &bar, &dock, &launcher, &account_menu.window, &desktop_menu.window, &notices.window, &switcher.window, &clips.window, &about.window };
 
     place(screen);
 
 }
 
 /// Every surface, for the event loop.
-pub fn windows() [5]*gui.Window {
+pub fn windows() []const *gui.Window {
 
-    return .{ &wallpaper, &bar, &dock, &launcher, &menu };
+    return &surfaces;
 
 }
 
@@ -380,6 +352,8 @@ pub fn start(name: []const u8) void {
 pub fn stop() void {
 
     dismiss();
+    notices.clear();
+    about.hide();
     bar.hide();
     dock.hide();
     gui.display.reserve(0, 0) catch {
@@ -396,13 +370,15 @@ pub fn tick() void {
     // The search field takes its own keys, so a changed text is how typing shows.
     if (search_text.version != searched) filter();
 
+    notices.tick();
+
     const now = api.clock();
     if (now / 60 == minute or bar.surface.hidden) return;
 
     const date = api.Date.init(now);
 
     minute = now / 60;
-    time.content.label = std.fmt.bufPrint(&time_bytes, "{s} {d} {s}   {d:0>2}:{d:0>2}", .{ days[date.weekday], date.day, months[date.month - 1], date.hour, date.minute }) catch "";
+    time.content.label = std.fmt.bufPrint(&time_bytes, "{s} {d} {s}   {d:0>2}:{d:0>2}", .{ api.time.days[date.weekday][0..3], date.day, api.time.months[date.month - 1][0..3], date.hour, date.minute }) catch "";
     bar.refresh();
 
 }
@@ -413,18 +389,42 @@ pub fn react(input: gui.Input) bool {
     const event = input.event;
     const window = input.window;
 
-    if (window != &wallpaper and window != &bar and window != &dock and window != &launcher and window != &menu) return false;
+    if (std.mem.indexOfScalar(*gui.Window, &surfaces, window) == null) return false;
+
+    // Alt+Tab reaches whichever desktop surface the display hands it to.
+    if (switcher.react(event)) return true;
 
     switch (event.kind) {
 
-        .notice => refresh(),
+        .notice => switch (@as(api.Event.Notice, @enumFromInt(event.code))) {
+
+            .windows => refresh(),
+            .clipboard => clips.copied(),
+            _ => {
+
+            },
+
+        },
         .resize => if (window == &wallpaper) place(.{
 
             .width = event.x,
             .height = event.y,
 
         }),
-        .button => if (event.pressed and window == &wallpaper) dismiss(),
+        .close => if (window == &about.window) about.hide(),
+        .button => if (event.pressed and window == &wallpaper) {
+
+            dismiss();
+
+            // The right button opens the wallpaper's menu where it was pressed.
+            if (event.code == 1) desktop_menu.show(.{
+
+                .x = event.x,
+                .y = event.y,
+
+            }, wallpaper.surface.list.bounds());
+
+        },
         .key => {
 
             if (!event.pressed) return true;
@@ -442,6 +442,14 @@ pub fn react(input: gui.Input) bool {
                     's' => screenshot(),
                     'e' => start_app(.explorer, home),
                     't' => start_app(.terminal, home),
+                    'v' => {
+
+                        const shown = !clips.window.surface.hidden;
+
+                        dismiss();
+                        if (!shown) clips.toggle();
+
+                    },
                     else => {
 
                     },
@@ -465,20 +473,47 @@ pub fn react(input: gui.Input) bool {
 
 }
 
-/// Answers apps the session launched, such as Settings asking for the wallpaper to reload.
+/// Answers apps the session launched, such as Settings asking for the wallpaper to reload, or a timer showing a notification.
 pub fn serve() void {
 
     while (true) {
 
         const request = api.receive(false) catch return;
-        const known = protocol.operation(request.second) == .reload;
+        const result: u64 = switch (protocol.operation(request.second)) {
 
-        if (known) reload();
-        api.reply(request, if (known) 0 else protocol.invalid) catch {
+            .reload => blk: {
+
+                reload();
+                break :blk 0;
+
+            },
+            .notify => notify(request),
+            else => protocol.invalid,
+
+        };
+
+        api.reply(request, result) catch {
 
         };
 
     }
+
+}
+
+/// Shows the notification an app sent as its title, a NUL, and its detail.
+fn notify(request: api.Request) u64 {
+
+    var bytes: [64 + 1 + 192]u8 = undefined;
+    if (request.fourth > bytes.len) return protocol.invalid;
+
+    api.fetch(request, 0, bytes[0..request.fourth]) catch return protocol.invalid;
+
+    const message = bytes[0..request.fourth];
+    const split = std.mem.indexOfScalar(u8, message, 0) orelse message.len;
+
+    notices.post(.bell, message[0..split], message[@min(split + 1, message.len)..]);
+
+    return 0;
 
 }
 
@@ -503,11 +538,15 @@ fn place(screen: gui.Rect) void {
 
     });
 
-    var area = menu.surface.list.bounds();
+    account_menu.put(.{
 
-    area.x = screen.width - area.width - margin;
-    area.y = height + margin;
-    menu.move(area);
+        .x = screen.width,
+        .y = height + margin,
+
+    }, screen);
+    notices.place(screen, height);
+    switcher.place(screen);
+    clips.place(screen);
 
 }
 
@@ -664,20 +703,22 @@ fn toggle(_: *gui.Node) void {
 
 fn reveal(_: *gui.Node) void {
 
-    if (!menu.surface.hidden) return dismiss();
+    if (account_menu.shown()) return dismiss();
 
     dismiss();
     user.selected = true;
-    menu.show();
+    account_menu.window.show();
     bar.refresh();
 
 }
 
-/// Closes the launcher and the session menu.
+/// Closes the launcher, the menus, and the clipboard history.
 pub fn dismiss() void {
 
     if (!launcher.surface.hidden) launcher.hide();
-    if (!menu.surface.hidden) menu.hide();
+    account_menu.hide();
+    desktop_menu.hide();
+    clips.hide();
 
     apps.selected = false;
     user.selected = false;
@@ -685,16 +726,33 @@ pub fn dismiss() void {
 
 }
 
-fn choose(node: *gui.Node) void {
+fn files_open() void {
 
-    dismiss();
-    choices[node.data].run();
+    start_app(.explorer, home);
+
+}
+
+fn terminal_open() void {
+
+    start_app(.terminal, home);
+
+}
+
+fn settings_open() void {
+
+    start_app(.settings, home);
+
+}
+
+fn about_open() void {
+
+    about.show(user_label.content.label);
 
 }
 
 var saved_bytes: [96]u8 = undefined;
 
-/// Saves the screen as `~/Screenshot DATE.png` and says so in the bar.
+/// Saves the screen as `~/Screenshot DATE.png` and says so in a notification.
 fn screenshot() void {
 
     var arena = std.heap.ArenaAllocator.init(api.pages);
@@ -710,15 +768,9 @@ fn screenshot() void {
     const name = std.fmt.bufPrint(&saved_bytes, "Screenshot {d}-{d:0>2}-{d:0>2} {d:0>2}.{d:0>2}.{d:0>2}.png", .{ date.year, date.month, date.day, date.hour, date.minute, date.second }) catch return;
     const path = std.fmt.bufPrint(&path_bytes, "{s}/{s}", .{ home, name }) catch return;
 
-    files.save(allocator, path, bytes) catch {
+    files.save(allocator, path, bytes) catch return notices.post(.warning, "Could not save the screenshot", home);
 
-        title.content.label = "Could not save the screenshot.";
-        return bar.refresh();
-
-    };
-
-    title.content.label = name;
-    bar.refresh();
+    notices.post(.image, "Screenshot saved", name);
 
 }
 

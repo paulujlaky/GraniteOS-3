@@ -40,6 +40,20 @@ pub const Content = union(enum) {
 
 };
 
+/// The left button going down on a node, the pointer moving while it is held, and the button coming up; `at` is in surface coordinates.
+pub const Track = struct {
+
+    at: Point,
+    phase: enum {
+
+        down,
+        move,
+        up,
+
+    },
+
+};
+
 /// The nodes a window highlights while drawing.
 pub const Marks = struct {
 
@@ -64,6 +78,9 @@ pub const Node = struct {
 
     /// Runs on double-click, or on Enter while focused, such as opening a file in a list.
     open: ?*const fn (*Node) void = null,
+
+    /// Follows the pointer from a press on the node until release, such as drawing on a canvas.
+    track: ?*const fn (*Node, Track) void = null,
 
     /// Free for the app, such as an index into its own data.
     data: usize = 0,
@@ -360,7 +377,7 @@ pub const Node = struct {
 
     }
 
-    /// The deepest focusable node under `point`.
+    /// The deepest focusable or tracking node under `point`.
     pub fn hit(self: *Node, point: Point) ?*Node {
 
         if (!self.shown() or !self.rect.contains(point)) return null;
@@ -380,7 +397,7 @@ pub const Node = struct {
 
         }
 
-        return if (self.focusable()) self else null;
+        return if (self.focusable() or self.track != null) self else null;
 
     }
 

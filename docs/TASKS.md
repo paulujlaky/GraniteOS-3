@@ -50,7 +50,7 @@
 - [x] Desktop shell and application launching.
 - [ ] Desktop responsiveness, rendering, and usability improvements over GraniteOS 2.
 - [x] File manager, editor, image viewer, settings, and system monitoring.
-- [ ] Remaining GraniteOS 2 desktop utilities with independently implemented code.
+- [x] Remaining GraniteOS 2 desktop utilities with independently implemented code.
 
 ## Milestone 6: Workflows
 

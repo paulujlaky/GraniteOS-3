@@ -22,10 +22,14 @@ pub const Paint = style.Paint;
 pub const Edges = style.Edges;
 
 pub const Node = @import("node.zig").Node;
+pub const Track = @import("node.zig").Track;
 pub const Text = @import("text.zig").Text;
 pub const leading = @import("text.zig").leading;
 pub const Image = @import("image.zig").Image;
 pub const Graph = @import("graph.zig").Graph;
+pub const sketch = @import("sketch.zig");
+pub const Sketch = sketch.Sketch;
+pub const Figure = sketch.Figure;
 pub const Prompt = @import("prompt.zig").Prompt;
 
 pub const Surface = @import("surface.zig").Surface;
@@ -145,10 +149,17 @@ pub fn picture(shown: *Image, look: Style) Node {
 
 }
 
-/// A node showing `shown`, a graph the app keeps; refresh the window after changing its values.
+/// A node showing `shown`, a graph the app keeps; invalidate it and the node after changing its values.
 pub fn chart(shown: *Graph, look: Style) Node {
 
-    var result = custom(&Graph.recorder, look);
+    return figure(&shown.figure, look);
+
+}
+
+/// A node showing `shown`, a figure the app keeps and paints with a `Sketch`.
+pub fn figure(shown: *Figure, look: Style) Node {
+
+    var result = custom(&Figure.recorder, look);
 
     result.data = @intFromPtr(shown);
 

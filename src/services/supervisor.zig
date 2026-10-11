@@ -204,7 +204,9 @@ fn launch(request: api.Request) u64 {
 
     const id = api.spawn(image, request, request.first) catch |err| return if (err == error.Denied) protocol.denied else protocol.invalid;
 
+    // It may call its launcher back, and its session, such as to show a notification.
     _ = api.raw(.connect, id, request.first, 0);
+    if (session != request.first) _ = api.raw(.connect, id, session, 0);
     app.* = .{
 
         .id = id,
@@ -326,6 +328,7 @@ fn handle(request: api.Request) u64 {
 
         .launch => return launch(request),
         .argument => return argument(request),
+        .session => return owner(request.first) orelse protocol.missing,
 
         .end => {
 

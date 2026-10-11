@@ -51,6 +51,8 @@ pub const Operation = enum(u8) {
     capture,
     rename,
     reload,
+    session,
+    notify,
     _,
 
 };

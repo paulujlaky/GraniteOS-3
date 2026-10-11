@@ -4,6 +4,7 @@ const font = @import("font.zig");
 const canvas = @import("canvas.zig");
 const draw = @import("draw.zig");
 const node = @import("node.zig");
+const sketch = @import("sketch.zig");
 const text = @import("text.zig");
 
 comptime {
@@ -546,5 +547,56 @@ test "UTF-8 text decodes leniently, keeps the caret on whole characters, and dra
 
     try std.testing.expect(edit.vertical(face, 20, 1000, 1, false));
     try std.testing.expectEqual(7, edit.caret);
+
+}
+
+test "sketches cover anti-aliased discs, lines, arcs, and outlines, and skip glyphs outside a canvas's limit" {
+
+    var pixels = [_]u32{0} ** (32 * 32);
+    var target = sketch.Sketch{
+
+        .pixels = &pixels,
+        .width = 32,
+        .height = 32,
+
+    };
+
+    // Solid inside, clear outside, and part-covered on the edge, premultiplied.
+    target.disc(16, 16, 6.3, 0xffffff);
+    try std.testing.expectEqual(0xffffffff, pixels[16 * 32 + 16]);
+    try std.testing.expectEqual(0, pixels[16 * 32 + 26]);
+
+    const edge = pixels[16 * 32 + 22];
+
+    try std.testing.expect(edge >> 24 > 0 and edge >> 24 < 255 and edge & 0xff == edge >> 24);
+
+    // A quarter arc from twelve to three o'clock inks the top right only.
+    target.clear(sketch.transparent);
+    target.arc(16, 16, 10, 2, 0, 0.25, 0xffffff);
+    try std.testing.expect(pixels[6 * 32 + 22] >> 24 > 0 or pixels[8 * 32 + 23] >> 24 > 0);
+    try std.testing.expectEqual(0, pixels[26 * 32 + 16]);
+    try std.testing.expectEqual(0, pixels[16 * 32 + 6]);
+
+    // A translucent line blends over what is there; an outlined rectangle leaves its middle alone.
+    target.clear(0x000000);
+    target.line(2, 16, 30, 16, 4, canvas.shade(0xffffff, 128));
+    try std.testing.expect(pixels[16 * 32 + 16] & 0xff > 100 and pixels[16 * 32 + 16] & 0xff < 140);
+    target.rectangle(.{ 4, 4, 28, 28 }, 0, 2, 0xff0000);
+    try std.testing.expectEqual(0xffff0000, pixels[4 * 32 + 16]);
+    try std.testing.expectEqual(0xff000000, pixels[10 * 32 + 10]);
+
+    // Text wholly outside the limit draws nothing, as when only a window's corner is redrawn.
+    var screen = [_]u32{0} ** (64 * 64);
+    var surface = canvas.Canvas{
+
+        .pixels = &screen,
+        .width = 64,
+        .height = 64,
+        .limit = .{ .x = 0, .y = 0, .width = 8, .height = 8 },
+
+    };
+
+    surface.text(font.sans(), "Hidden", 14, 20, 40, 0xffffff);
+    for (screen) |pixel| try std.testing.expectEqual(0, pixel);
 
 }

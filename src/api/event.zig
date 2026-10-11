@@ -42,6 +42,9 @@ pub const Event = packed struct(u64) {
 
         /// Windows opened, closed, or changed title, focus, or state; only the session hears it.
         windows,
+
+        /// An app copied something; only the session hears it, to keep a history.
+        clipboard,
         _,
 
     };

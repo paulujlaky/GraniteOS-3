@@ -164,9 +164,9 @@ const Surface = struct {
     shown: bool = false,
 
     minimized: bool = false,
-    maximized: bool = false,
+    tile: Tile = .free,
 
-    /// Where a maximised window goes back to.
+    /// Where a tiled window goes back to.
     restore: gui.Rect = .{},
 
     /// How it comes and goes, the transition it is in, if any, and the pose it shows in.
@@ -211,7 +211,7 @@ const Surface = struct {
 
     fn resizable(self: *const Surface) bool {
 
-        return self.decorated() and !self.options.fixed and !self.maximized;
+        return self.decorated() and !self.options.fixed and self.tile != .full;
 
     }
 
@@ -318,6 +318,33 @@ const Edges = packed struct(u4) {
 
 };
 
+/// Where the window manager fits a window: where its owner left it, the whole work area, or half of it.
+const Tile = enum {
+
+    free,
+    full,
+    left,
+    right,
+
+    /// The frame a window tiled this way fills; null when free.
+    fn zone(self: Tile) ?gui.Rect {
+
+        const room = work();
+        const half = @divTrunc(room.width, 2);
+
+        return switch (self) {
+
+            .free => null,
+            .full => room,
+            .left => .{ .x = room.x, .y = room.y, .width = half, .height = room.height },
+            .right => .{ .x = room.x + half, .y = room.y, .width = room.width - half, .height = room.height },
+
+        };
+
+    }
+
+};
+
 /// A control on a title bar under the pointer, or pressed.
 const Hot = struct {
 
@@ -346,6 +373,13 @@ var depth: usize = 0;
 var focused: ?usize = null;
 
 var grabbed: ?Grab = null;
+
+/// Where the window being dragged would tile if dropped now, shown as a translucent outline.
+var aimed: Tile = .free;
+
+/// An Alt+Tab went to the session, so the Alt release that ends it goes there too.
+var switching = false;
+
 var hot: ?Hot = null;
 var armed: ?Hot = null;
 
@@ -382,6 +416,7 @@ var copied: usize = 0;
 var drawing: u64 = 0;
 
 var chrome: [2048]u8 align(4) = undefined;
+var outline_bytes: [256]u8 align(4) = undefined;
 var kept: gui.Corners = .{};
 var listed: [surfaces.len]api.display.Window = undefined;
 
@@ -625,9 +660,9 @@ fn settle() void {
 
             reshape(index, back.bounds());
 
-        } else if (surface.maximized) {
+        } else if (surface.tile.zone()) |zone| {
 
-            reshape(index, inside(work()));
+            reshape(index, inside(zone));
 
         } else if (surface.decorated()) {
 
@@ -778,7 +813,7 @@ fn place(request: api.Request, id: u64) u64 {
 
         area.x = surface.area.x;
         area.y = surface.area.y;
-        if (surface.maximized) area = surface.area;
+        if (surface.tile != .free) area = surface.area;
 
     }
 
@@ -854,7 +889,7 @@ fn windows(request: api.Request) u64 {
 
                 .focused = focused == index,
                 .minimized = surface.minimized,
-                .maximized = surface.maximized,
+                .maximized = surface.tile == .full,
 
             },
             .length = @intCast(surface.length),
@@ -927,7 +962,8 @@ fn reserve(request: api.Request, value: u64) u64 {
 
     for (&surfaces, 0..) |*surface, index| {
 
-        if (surface.client != 0 and surface.maximized and !surface.leaving) reshape(index, inside(work()));
+        if (surface.client == 0 or surface.leaving) continue;
+        if (surface.tile.zone()) |zone| reshape(index, inside(zone));
 
     }
 
@@ -1014,6 +1050,9 @@ fn paste(request: api.Request, value: u64) u64 {
         api.fetch(request, 0, clipboard[0..length]) catch return protocol.invalid;
         copied = length;
 
+        // The session keeps a history of what was copied.
+        inform(.clipboard);
+
         return 0;
 
     }
@@ -1048,6 +1087,13 @@ fn redraw() void {
 
             const surface = &surfaces[index];
             if (!surface.drawn()) continue;
+
+            if (aiming(index)) {
+
+                drawing = 0;
+                device.render(guide().commands(), .{}, visible, texture);
+
+            }
 
             if (surface.transition != null) {
 
@@ -1188,6 +1234,14 @@ fn paint(visible: gui.Rect) void {
     for (stack[0..depth]) |index| {
 
         const surface = &surfaces[index];
+
+        if (aiming(index)) {
+
+            drawing = 0;
+            gui.draw.replay(&back, guide().commands(), .{}, visible, pixels);
+
+        }
+
         if (!surface.visible() or surface.transition != null or surface.footprint().intersect(visible) == null) continue;
 
         const decorations = trim(index);
@@ -1261,11 +1315,34 @@ fn route(event: api.Event) void {
 
             modifiers = event.modifiers;
 
-            // Super chords are the desktop's, whichever window has the keyboard.
             const target = keyboard();
             const owner = session();
 
-            if (event.modifiers.super and owner != 0 and (target == null or surfaces[target.?].client != owner)) {
+            // Super and the arrows tile the window with the keyboard, as dragging it to an edge does.
+            if (event.pressed and event.modifiers.super and !event.modifiers.shift) if (target) |index| if (surfaces[index].decorated()) {
+
+                switch (event.key()) {
+
+                    .left => return arrange(index, .left),
+                    .right => return arrange(index, .right),
+                    .up => return arrange(index, .full),
+                    .down => return if (surfaces[index].tile == .free) minimize(index) else arrange(index, .free),
+                    else => {
+
+                    },
+
+                }
+
+            };
+
+            // Super chords, and Alt+Tab with the Alt release that ends it, are the desktop's, whichever window has the keyboard.
+            const cycling = event.modifiers.alt and event.key() == .tab;
+            const ending = switching and event.key() == .alt and !event.pressed;
+
+            if (cycling) switching = true;
+            if (ending) switching = false;
+
+            if ((event.modifiers.super or cycling or ending) and owner != 0 and (target == null or surfaces[target.?].client != owner)) {
 
                 for (stack[0..depth]) |index| {
 
@@ -1437,6 +1514,8 @@ fn press(code: u8) void {
                 },
                 .edge => {
 
+                    // A half-screen window resized by hand stays where it is left.
+                    surface.tile = .free;
                     grab(index, edges(index, pointer));
                     continue;
 
@@ -1468,8 +1547,16 @@ fn press(code: u8) void {
 
 }
 
-/// Ends a drag, or runs the title bar control the press began on if the pointer is still over it.
+/// Ends a drag, tiling the window if it was dropped at an edge, or runs the title bar control the press began on if the pointer is still over it.
 fn release() void {
+
+    if (grabbed) |held| if (aimed != .free) {
+
+        compose(aimed.zone().?);
+        arrange(held.index, aimed);
+        aimed = .free;
+
+    };
 
     grabbed = null;
 
@@ -1518,8 +1605,8 @@ fn follow(grab_state: Grab) void {
     const sides = grab_state.edges;
     var area = origin;
 
-    // Dragging a maximised window by its title puts it back to its own size under the pointer, once it really moves.
-    if (surface.maximized and @as(u4, @bitCast(sides)) == 0) {
+    // Dragging a tiled window by its title puts it back to its own size under the pointer, once it really moves.
+    if (surface.tile != .free and @as(u4, @bitCast(sides)) == 0) {
 
         if (@abs(dx) + @abs(dy) < 6) return;
 
@@ -1528,7 +1615,7 @@ fn follow(grab_state: Grab) void {
         area = surface.restore;
         area.x = pointer.x - @as(i32, @intFromFloat(ratio * @as(f32, @floatFromInt(area.width))));
         area.y = surface.area.y;
-        surface.maximized = false;
+        surface.tile = .free;
         reshape(grab_state.index, area);
         changed = true;
         grab(grab_state.index, .{});
@@ -1540,11 +1627,21 @@ fn follow(grab_state: Grab) void {
     if (@as(u4, @bitCast(sides)) == 0) {
 
         const before = surface.footprint();
+        const target = aim(pointer);
 
         area.x += dx;
         area.y = std.math.clamp(origin.y + dy, work().y + theme.title, @as(i32, @intCast(back.height)) - border);
         surface.area = area;
         compose(before.join(surface.footprint()));
+
+        // Reaching an edge outlines where the window would tile.
+        if (target != aimed and !surface.options.fixed) {
+
+            if (aimed.zone()) |zone| compose(zone);
+            if (target.zone()) |zone| compose(zone);
+            aimed = target;
+
+        }
 
         return;
 
@@ -1589,22 +1686,57 @@ fn reshape(index: usize, area: gui.Rect) void {
 /// Maximises window `index` into the work area, or puts it back.
 fn toggle(index: usize) void {
 
+    arrange(index, if (surfaces[index].tile == .full) .free else .full);
+
+}
+
+/// Fits window `index` as `tile` says, remembering where it was, or puts it back where it was when `free`.
+fn arrange(index: usize, tile: Tile) void {
+
     const surface = &surfaces[index];
+    if (surface.options.fixed or surface.tile == tile) return;
 
-    if (surface.maximized) {
-
-        surface.maximized = false;
-        reshape(index, surface.restore);
-
-    } else {
-
-        surface.restore = surface.area;
-        surface.maximized = true;
-        reshape(index, inside(work()));
-
-    }
-
+    if (surface.tile == .free) surface.restore = surface.area;
+    surface.tile = tile;
+    reshape(index, if (tile.zone()) |zone| inside(zone) else surface.restore);
     changed = true;
+
+}
+
+/// Where a window dragged with the pointer at `at` would tile: maximised at the top edge, a half at either side.
+fn aim(at: gui.Point) Tile {
+
+    if (at.y <= 0) return .full;
+    if (at.x <= 0) return .left;
+    if (at.x >= @as(i32, @intCast(back.width)) - 1) return .right;
+
+    return .free;
+
+}
+
+/// Whether the tiling outline goes just under surface `index`, the window being dragged.
+fn aiming(index: usize) bool {
+
+    return aimed != .free and grabbed != null and grabbed.?.index == index;
+
+}
+
+/// Records the translucent outline of where the dragged window would tile, in screen coordinates.
+fn guide() gui.draw.List {
+
+    var list = gui.draw.List{
+
+        .bytes = &outline_bytes,
+        .width = @intCast(back.width),
+        .height = @intCast(back.height),
+
+    };
+    const zone = (aimed.zone() orelse return list).inset(8);
+
+    list.round(zone, theme.corner + 2, gui.shade(0xffffff, 40));
+    list.round(zone.inset(2), theme.corner, gui.shade(0x000000, 60));
+
+    return list;
 
 }
 
@@ -1652,7 +1784,7 @@ fn queue(index: usize, event: api.Event) void {
 
         const last = &owner.events[(owner.head + owner.queued - 1) % capacity];
 
-        if (last.surface == item.surface and last.event.kind == event.kind and (event.kind == .pointer or event.kind == .resize or event.kind == .notice)) {
+        if (last.surface == item.surface and last.event.kind == event.kind and (event.kind == .pointer or event.kind == .resize or (event.kind == .notice and last.event.code == event.code))) {
 
             last.* = item;
             return;
@@ -1708,6 +1840,12 @@ fn announce() void {
     if (!changed) return;
 
     changed = false;
+    inform(.windows);
+
+}
+
+/// Sends the session `notice` through the first of its surfaces.
+fn inform(notice: api.Event.Notice) void {
 
     const owner = session();
     if (owner == 0) return;
@@ -1719,7 +1857,7 @@ fn announce() void {
         queue(index, .{
 
             .kind = .notice,
-            .code = @intFromEnum(api.Event.Notice.windows),
+            .code = @intFromEnum(notice),
 
         });
         deliver(client(owner).?);
@@ -1857,7 +1995,13 @@ fn close(index: usize) void {
     const surface = &surfaces[index];
     if (surface.leaving) return;
 
-    if (grabbed != null and grabbed.?.index == index) grabbed = null;
+    if (grabbed != null and grabbed.?.index == index) {
+
+        if (aimed.zone()) |zone| compose(zone);
+        grabbed = null;
+        aimed = .free;
+
+    }
     if (hot != null and hot.?.index == index) hot = null;
     if (armed != null and armed.?.index == index) armed = null;
     if (capture == index) capture = null;
@@ -2092,6 +2236,15 @@ fn trim(index: usize) gui.draw.List {
     const within = frame.inset(border);
 
     list.round(frame, theme.corner, if (active) theme.selected else theme.line);
+
+    // Content draws over its own background, so a window growing faster than its app redraws shows that rather than what lay behind.
+    list.limit = gui.draw.move(surface.area, .{
+
+        .x = -footprint.x,
+        .y = -footprint.y,
+
+    });
+    list.round(within, curve, theme.background);
     list.limit = bar.inset(border);
     list.round(within, curve, theme.raised);
 

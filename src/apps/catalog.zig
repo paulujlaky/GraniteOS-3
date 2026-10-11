@@ -22,6 +22,10 @@ pub const apps = [_]App{
     .{ .image = .editor, .title = "Editor", .icon = .edit, .summary = "Write text and code" },
     .{ .image = .terminal, .title = "Terminal", .icon = .terminal, .summary = "Run OBSIDIAN shell commands" },
     .{ .image = .viewer, .title = "Viewer", .icon = .image, .summary = "Look at pictures" },
+    .{ .image = .drawing, .title = "Drawing", .icon = .brush, .summary = "Sketch and paint pictures" },
+    .{ .image = .calculator, .title = "Calculator", .icon = .calculator, .summary = "Work out sums" },
+    .{ .image = .clock, .title = "Clock", .icon = .clock, .summary = "World time, stopwatch, and timer" },
+    .{ .image = .calendar, .title = "Calendar", .icon = .calendar, .summary = "Months, weeks, and holidays" },
     .{ .image = .monitor, .title = "Monitor", .icon = .activity, .summary = "Watch processes, memory, and processors" },
     .{ .image = .settings, .title = "Settings", .icon = .settings, .summary = "Display, appearance, and accounts" },
 

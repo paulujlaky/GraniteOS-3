@@ -221,6 +221,8 @@ fn sample() void {
 
     push(&processor_history, share);
     push(&memory_history, fraction);
+    processor.plot.invalidate();
+    memory.plot.invalidate();
 
     processor.value.content.label = std.fmt.bufPrint(&processor.bytes, "{d:.0}%", .{share * 100}) catch "";
     processor.detail.content.label = std.fmt.bufPrint(&processor.detail_bytes, "{d} processors, {d} processes", .{ summary.processors, summary.processes }) catch "";

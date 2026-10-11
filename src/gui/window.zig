@@ -86,6 +86,9 @@ pub const Window = struct {
     /// The button went down in a text field and is still held, so moving selects.
     selecting: bool = false,
 
+    /// The button went down on a node that follows the pointer, and is still held.
+    tracking: ?*Node = null,
+
     /// Waits for the display, then opens a window showing `root`.
     pub fn open(root: *Node, options: Options) !Window {
 
@@ -304,6 +307,8 @@ pub const Window = struct {
 
                 self.pointer = at;
 
+                if (self.tracking) |held| follow(held, at, .move);
+
                 if (self.selecting) if (self.focused) |field| {
 
                     edited(field).select(field.locate(at), true);
@@ -373,6 +378,15 @@ pub const Window = struct {
             self.time = now;
             self.invalidate(new);
 
+            if (new.track != null) {
+
+                self.tracking = new;
+                follow(new, at, .down);
+
+                return true;
+
+            }
+
             // Like most desktops, clicking a button does not steal focus from the field being typed in.
             if (new.editable()) {
 
@@ -393,6 +407,13 @@ pub const Window = struct {
         }
 
         self.selecting = false;
+
+        if (self.tracking) |held| {
+
+            self.tracking = null;
+            follow(held, at, .up);
+
+        }
 
         const was = self.pressed orelse return false;
 
@@ -589,5 +610,16 @@ fn edited(target: *Node) *text.Text {
 fn activate(target: *Node) void {
 
     if (target.action) |action| action(target);
+
+}
+
+fn follow(target: *Node, at: Point, phase: @FieldType(node.Track, "phase")) void {
+
+    target.track.?(target, .{
+
+        .at = at,
+        .phase = phase,
+
+    });
 
 }

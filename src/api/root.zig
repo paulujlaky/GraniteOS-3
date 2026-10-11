@@ -11,7 +11,8 @@ pub const Display = display.Display;
 pub const pages = @import("heap.zig").pages;
 pub const Event = @import("event.zig").Event;
 pub const Key = @import("event.zig").Key;
-pub const Date = @import("time.zig").Date;
+pub const time = @import("time.zig");
+pub const Date = time.Date;
 pub const Request = abi.Request;
 pub const ApiError = error{ Denied, Invalid, Missing, Deadlock, Exhausted, Timeout, Busy };
 pub const ServiceError = ApiError || error{ Exists, Full };
@@ -321,6 +322,36 @@ pub fn argument(bytes: []u8) []const u8 {
     const length = exchange(0, protocol.pack(.argument, 0), bytes) catch return "";
 
     return if (length <= bytes.len) bytes[0..length] else "";
+
+}
+
+var session: u64 = 0;
+
+/// Shows `title` and `detail` as a notification on the caller's desktop, such as a timer running out.
+pub fn notify(title: []const u8, detail: []const u8) ServiceError!void {
+
+    var bytes: [64 + 1 + 192]u8 = undefined;
+    if (title.len > 64 or detail.len > 192) return error.Invalid;
+
+    if (session == 0) {
+
+        const id = try call(0, protocol.pack(.session, 0));
+
+        try supervised(id);
+        session = id;
+
+    }
+
+    @memcpy(bytes[0..title.len], title);
+    bytes[title.len] = 0;
+    @memcpy(bytes[title.len + 1 ..][0..detail.len], detail);
+
+    _ = exchange(session, protocol.pack(.notify, 0), bytes[0 .. title.len + 1 + detail.len]) catch |err| {
+
+        session = 0;
+        return err;
+
+    };
 
 }
 

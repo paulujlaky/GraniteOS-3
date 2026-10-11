@@ -299,9 +299,13 @@ pub const Canvas = struct {
         const scale = size / face.units;
         const visible = self.region() orelse return;
         const alpha = opacity(color);
+        const reach: i32 = @intFromFloat(@ceil(size * 1.5));
         var pen: f32 = @floatFromInt(x);
         var previous: u16 = 0;
         var characters = font.decode(string);
+
+        // Rasterising is the slow part, so glyphs wholly outside the visible area are skipped, such as when redrawing a window's corner.
+        if (baseline + reach < visible.y or baseline - reach > visible.bottom()) return;
 
         while (characters.next()) |char| {
 
@@ -309,6 +313,18 @@ pub const Canvas = struct {
 
             pen += face.kerning(previous, glyph) * scale;
             previous = glyph;
+
+            const advance = face.advance(glyph) * scale;
+
+            // Runs only move right, so nothing further along shows either.
+            if (pen > @as(f32, @floatFromInt(visible.right() + reach))) return;
+
+            if (pen + advance + size < @as(f32, @floatFromInt(visible.x))) {
+
+                pen += advance;
+                continue;
+
+            }
 
             if (face.render(glyph, scale, pen - @floor(pen))) |bitmap| {
 
@@ -334,7 +350,7 @@ pub const Canvas = struct {
 
             }
 
-            pen += face.advance(glyph) * scale;
+            pen += advance;
 
         }
 

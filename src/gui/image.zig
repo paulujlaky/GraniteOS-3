@@ -4,6 +4,7 @@ const api = @import("api");
 
 const Canvas = @import("canvas.zig").Canvas;
 const Rect = @import("canvas.zig").Rect;
+const Sketch = @import("sketch.zig").Sketch;
 
 /// Premultiplied 0xAARRGGBB pixels shared with the display, so image nodes and commands can draw them.
 pub const Image = struct {
@@ -60,6 +61,19 @@ pub const Image = struct {
 
     /// The pixels as a canvas, for drawing into on the CPU; opaque colours stay opaque.
     pub fn canvas(self: *const Image) Canvas {
+
+        return .{
+
+            .pixels = self.pixels(),
+            .width = self.width,
+            .height = self.height,
+
+        };
+
+    }
+
+    /// The pixels as a sketch, for anti-aliased lines, rings, and other shapes.
+    pub fn sketch(self: *const Image) Sketch {
 
         return .{
 

@@ -2,13 +2,8 @@
 
 const std = @import("std");
 
-const canvas = @import("canvas.zig");
-const draw = @import("draw.zig");
-const image = @import("image.zig");
-const node = @import("node.zig");
+const sketch = @import("sketch.zig");
 const theme = @import("theme.zig");
-
-const Rect = canvas.Rect;
 
 /// The widest graph drawn; wider areas draw nothing.
 const widest = 4096;
@@ -36,44 +31,28 @@ pub const Look = struct {
 
 };
 
-/// A smooth graph of `values`, each from 0 to 1, oldest first; record it with `gui.chart` or `record`.
+/// A smooth graph of `values`, each from 0 to 1, oldest first; show it with `gui.chart`, and call `invalidate` after changing them.
 pub const Graph = struct {
 
     values: []const f32,
     look: Look = .{},
-    picture: ?image.Image = null,
+    figure: sketch.Figure = .{
 
-    /// Draws the graph over `area`, remaking its image when the area changed size.
-    pub fn record(self: *Graph, area: Rect, target: *draw.List) void {
+        .paint = &paint,
 
-        if (area.width <= 0 or area.height <= 0 or area.width >= widest) return;
+    },
 
-        const width: u32 = @intCast(area.width);
-        const height: u32 = @intCast(area.height);
+    pub fn invalidate(self: *Graph) void {
 
-        if (self.picture) |*old| if (old.width != width or old.height != height) {
-
-            old.deinit();
-            self.picture = null;
-
-        };
-
-        if (self.picture == null) self.picture = image.Image.init(width, height) catch return;
-
-        const picture = &self.picture.?;
-
-        plot(picture.pixels(), width, height, self.values, self.look);
-        picture.publish() catch return;
-        target.image(picture.handle, area);
+        self.figure.invalidate();
 
     }
 
-    /// The custom node callback behind `gui.chart`, which keeps the graph in the node's data.
-    pub fn recorder(owner: *node.Node, target: *draw.List) void {
+    fn paint(figure: *sketch.Figure, target: *sketch.Sketch) void {
 
-        const self: *Graph = @ptrFromInt(owner.data);
+        const self: *Graph = @fieldParentPtr("figure", figure);
 
-        self.record(owner.inner(), target);
+        plot(target.pixels, target.width, target.height, self.values, self.look);
 
     }
 
@@ -126,7 +105,7 @@ pub fn plot(pixels: []u32, width: usize, height: usize, values: []const f32, loo
 
             pixel.over(look.line, covered * shade);
             pixel.over(look.line, std.math.clamp(half + 0.5 - distance(x, fy + 0.5, width), 0, 1));
-            pixels[y * width + x] = pixel.pack(inside(x, y, width, height, look.radius));
+            pixels[y * width + x] = pixel.pack(sketch.inside(x, y, width, height, look.radius));
 
         }
 
@@ -197,21 +176,6 @@ fn distance(x: usize, y: f32, width: usize) f32 {
     }
 
     return nearest;
-
-}
-
-/// How much of pixel (`x`, `y`) lies inside a `width` by `height` rectangle with corners of `radius`.
-fn inside(x: usize, y: usize, width: usize, height: usize, radius: i32) f32 {
-
-    const r: f32 = @floatFromInt(@max(@min(radius, @as(i32, @intCast(@min(width, height) / 2))), 0));
-    const fx = @as(f32, @floatFromInt(x)) + 0.5;
-    const fy = @as(f32, @floatFromInt(y)) + 0.5;
-    const dx = fx - std.math.clamp(fx, r, @as(f32, @floatFromInt(width)) - r);
-    const dy = fy - std.math.clamp(fy, r, @as(f32, @floatFromInt(height)) - r);
-
-    if (dx == 0 and dy == 0) return 1;
-
-    return std.math.clamp(r - @sqrt(dx * dx + dy * dy) + 0.5, 0, 1);
 
 }
 
