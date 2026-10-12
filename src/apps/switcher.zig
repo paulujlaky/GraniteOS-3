@@ -1,7 +1,6 @@
 //! The window switcher: Alt+Tab shows every window, most recent first, and releasing Alt brings the chosen one forward.
 
 const catalog = @import("catalog.zig");
-const menu = @import("menu.zig");
 
 const api = @import("api");
 const gui = @import("gui");
@@ -25,7 +24,7 @@ var titles: [most]gui.Node = undefined;
 var parts: [most][2]*gui.Node = undefined;
 var tiles: [most]gui.Node = undefined;
 var list: [most]*gui.Node = undefined;
-var root = gui.box(menu.popup.with(.{
+var root = gui.box(theme.popup.with(.{
 
     .padding = gui.Edges.all(10),
     .direction = .row,
@@ -78,6 +77,7 @@ pub fn init(size: gui.Rect) void {
         .height = 116,
         .hidden = true,
         .motion = .fade,
+        .shadow = true,
 
     }) catch api.exit(3);
 

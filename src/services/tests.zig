@@ -7,6 +7,7 @@ const volume = @import("volume.zig");
 const gpt = @import("gpt.zig");
 const fat = @import("fat.zig");
 const gpu = @import("gpu.zig");
+const hid = @import("hid.zig");
 
 test "GPU quads cover exactly their pixels and sample texel centres under either pixel-centre convention" {
 
@@ -507,5 +508,32 @@ fn fatFile(bytes: []const u8, base: usize, directory: u32, name: []const u8, out
     }
 
     return error.Missing;
+
+}
+
+test "HID descriptors find boot keyboards and pointer reports, and keys translate to set-1 scancodes" {
+
+    // VMware's virtual USB mouse: sixteen buttons, absolute X and Y, then a wheel and a pan.
+    const descriptor = [_]u8{ 0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x09, 0x01, 0xa1, 0x00, 0x05, 0x09, 0x19, 0x01, 0x29, 0x10, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x10, 0x81, 0x02, 0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x00, 0x27, 0xff, 0x7f, 0x00, 0x00, 0x75, 0x10, 0x95, 0x02, 0x81, 0x02, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x01, 0x81, 0x06, 0x05, 0x0c, 0x0a, 0x38, 0x02, 0x81, 0x06, 0xc0, 0xc0 };
+    const shape = hid.layout(&descriptor) orelse return error.TestUnexpectedResult;
+
+    // Right button held, at the middle of the screen, one wheel step towards the user.
+    const report = [_]u8{ 0x02, 0x00, 0xff, 0x3f, 0xff, 0x3f, 0xff, 0x00 };
+
+    try std.testing.expectEqual(2, shape.buttons.read(&report));
+    try std.testing.expectEqual(0x3fff, shape.x.read(&report));
+    try std.testing.expectEqual(0x3fff, shape.y.read(&report));
+    try std.testing.expectEqual(-1, shape.wheel.read(&report));
+    try std.testing.expect(!shape.x.relative and shape.wheel.relative);
+
+    // A configuration with one boot keyboard interface and its interrupt-in endpoint.
+    const configuration = [_]u8{ 9, 2, 34, 0, 1, 1, 0, 0xa0, 50, 9, 4, 0, 0, 1, 3, 1, 1, 0, 9, 0x21, 0x11, 0x01, 0, 1, 0x22, 63, 0, 7, 5, 0x81, 3, 8, 0, 10 };
+    const found = hid.find(&configuration) orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(.keyboard, found.kind);
+    try std.testing.expectEqual(0x81, found.endpoint);
+    try std.testing.expectEqual(63, found.report);
+    try std.testing.expectEqual(0x1e, hid.translate(0x04));
+    try std.testing.expectEqual(0x148, hid.translate(0x52));
 
 }

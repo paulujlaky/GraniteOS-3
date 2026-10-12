@@ -48,6 +48,9 @@ pub const Options = struct {
     /// Starts off the screen until `show`.
     hidden: bool = false,
 
+    /// Casts a soft shadow, as undecorated pop-ups such as menus do.
+    shadow: bool = false,
+
     /// How it animates as it shows and hides.
     motion: api.display.Motion = .auto,
 
@@ -89,6 +92,19 @@ pub const Window = struct {
     /// The button went down on a node that follows the pointer, and is still held.
     tracking: ?*Node = null,
 
+    /// A card shown centred over the dimmed tree, such as a dialog; while it shows, only it takes input.
+    modal: ?*Node = null,
+
+    /// Runs on Escape while `modal` shows.
+    dismiss: ?*const fn (*Window) void = null,
+
+    /// Takes the events no node handled before the app sees them, such as a menu's arrow keys; true when it used one.
+    react: ?*const fn (*Window, api.Event) bool = null,
+
+    /// Pop-ups belonging to this window, such as its menus: `next` waits on them too, and a press in the window closes them.
+    popups: [4]*Window = undefined,
+    owned: usize = 0,
+
     /// Waits for the display, then opens a window showing `root`.
     pub fn open(root: *Node, options: Options) !Window {
 
@@ -116,6 +132,7 @@ pub const Window = struct {
 
             .fill = options.width == null and options.height == null,
             .fixed = options.fixed,
+            .shadow = options.shadow,
 
         };
 
@@ -136,12 +153,35 @@ pub const Window = struct {
 
     }
 
-    /// Repaints what changed, then waits up to `timeout` ticks for input; returns events no node handled.
+    /// Repaints what changed, then waits up to `timeout` ticks for input to the window or its pop-ups; returns the window's events no node handled.
     pub fn next(self: *Window, timeout: u64) ?api.Event {
 
-        const input = wait(&.{self}, timeout) orelse return null;
+        var family: [1 + @typeInfo(@TypeOf(self.popups)).array.len]*Window = undefined;
+
+        family[0] = self;
+        @memcpy(family[1..][0..self.owned], self.popups[0..self.owned]);
+
+        const input = wait(family[0 .. 1 + self.owned], timeout) orelse return null;
+        if (input.window != self) return null;
 
         return input.event;
+
+    }
+
+    /// Makes `popup` one of this window's pop-ups.
+    pub fn adopt(self: *Window, popup: *Window) void {
+
+        if (self.owned == self.popups.len) return;
+
+        self.popups[self.owned] = popup;
+        self.owned += 1;
+
+    }
+
+    /// The tree taking input: the modal card while one shows, else the root.
+    fn top(self: *const Window) *Node {
+
+        return self.modal orelse self.root;
 
     }
 
@@ -263,6 +303,15 @@ pub const Window = struct {
 
         self.root.arrange(bounds, &self.damage);
 
+        if (self.modal) |card| {
+
+            const size = card.measure();
+            const width = @min(size.width, bounds.width - 2 * theme.spacing);
+
+            card.arrange(bounds.centered(width, @min(size.height, bounds.height - 2 * theme.spacing)), &self.damage);
+
+        }
+
         for ([_]*?*Node{ &self.focused, &self.hovered, &self.pressed }) |mark| {
 
             if (mark.*) |marked| if (!marked.shown()) {
@@ -281,13 +330,25 @@ pub const Window = struct {
         self.damage = .{};
         target.reset();
         if (self.root.style.background == null and self.surface.spec.layer == .window) target.fill(bounds, background);
-        self.root.paint(target, .{
+        const marks = node.Marks{
 
             .hover = self.hovered,
             .focus = self.focused,
             .pressed = self.pressed,
 
-        }, background);
+        };
+
+        self.root.paint(target, marks, background);
+
+        // A dialog dims what it asks about and floats over it.
+        if (self.modal) |card| {
+
+            target.fill(bounds, theme.dim);
+            target.shadow(card.rect, card.style.radius, theme.spacing + 4, canvas.shade(0x000000, 110));
+            card.paint(target, marks, background);
+
+        }
+
         self.surface.present() catch self.refresh();
 
     }
@@ -316,7 +377,7 @@ pub const Window = struct {
 
                 };
 
-                const target = self.root.hit(at);
+                const target = self.top().hit(at);
 
                 if (target != self.hovered) {
 
@@ -351,9 +412,12 @@ pub const Window = struct {
 
     fn button(self: *Window, event: api.Event, at: Point) bool {
 
+        // A press anywhere in the window closes its pop-ups, before it does whatever it does.
+        if (event.pressed) for (self.popups[0..self.owned]) |popup| popup.hide();
+
         if (event.code == 3 or event.code == 4) {
 
-            const moved = self.root.wheel(at, if (event.code == 3) -step else step) orelse return false;
+            const moved = self.top().wheel(at, if (event.code == 3) -step else step) orelse return false;
 
             self.invalidate(moved);
 
@@ -361,9 +425,19 @@ pub const Window = struct {
 
         }
 
+        if (event.code == 1 and event.pressed) {
+
+            const holder = self.top().offer(at) orelse return false;
+
+            holder.menu.?(holder, at);
+
+            return true;
+
+        }
+
         if (event.code != 0) return false;
 
-        const target = self.root.hit(at);
+        const target = self.top().hit(at);
 
         if (event.pressed) {
 
@@ -431,6 +505,26 @@ pub const Window = struct {
 
         const target = self.focused;
         const typing = target != null and target.?.content == .area;
+
+        if (event.key() == .escape and self.modal != null) {
+
+            if (self.dismiss) |cancel| cancel(self);
+            return true;
+
+        }
+
+        if (event.key() == .f10 and event.modifiers.shift) if (target) |holder| if (holder.menu) |offer| {
+
+            offer(holder, .{
+
+                .x = holder.rect.x + theme.gap,
+                .y = holder.rect.bottom(),
+
+            });
+
+            return true;
+
+        };
 
         if (event.key() == .tab and !event.modifiers.control and !event.modifiers.alt and !typing) {
 
@@ -503,7 +597,7 @@ pub const Window = struct {
     fn cycle(self: *Window, backwards: bool) void {
 
         var list: [128]*Node = undefined;
-        const count = self.root.collect(&list, 0);
+        const count = self.top().collect(&list, 0);
         if (count == 0) return;
 
         const current = for (list[0..count], 0..) |entry, index| {
@@ -547,7 +641,11 @@ pub fn wait(windows: []const *Window, timeout: u64) ?Input {
 
         if (!window.surface.attached or window.surface.id != input.surface) continue;
 
-        if (window.dispatch(input.event)) {
+        const event = input.event;
+        const blocked = window.modal != null and (event.kind == .key or event.kind == .button);
+
+        // While a dialog asks something, the window's other keys and clicks go nowhere.
+        if (window.dispatch(event) or blocked or (window.react != null and window.react.?(window, event))) {
 
             window.update();
             return null;

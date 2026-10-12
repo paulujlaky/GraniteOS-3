@@ -7,7 +7,7 @@ const gui = @import("gui");
 
 const theme = gui.theme;
 
-const facts = [_][]const u8{ "Processors", "Memory", "Display", "Up for", "Signed in as" };
+const facts = [_][]const u8{ "Processors", "Memory", "Display", "Graphics", "Up for", "Signed in as" };
 
 var mark = gui.icon(.monitor, theme.icon.with(.{
 
@@ -78,8 +78,8 @@ pub fn init() void {
     window = gui.Window.open(&root, .{
 
         .title = "About GraniteOS",
-        .width = 340,
-        .height = 290,
+        .width = 380,
+        .height = 298,
         .fixed = true,
         .hidden = true,
 
@@ -93,6 +93,7 @@ pub fn show(account: []const u8) void {
     var records: [1]api.abi.Usage = undefined;
     const summary = api.stats(&records) catch api.abi.Summary{};
     const screen = gui.screen() catch gui.Rect{};
+    const adapter = gui.display.adapter() catch api.display.Adapter{};
     const minutes = summary.uptime / 100 / 60;
 
     user = account;
@@ -102,7 +103,8 @@ pub fn show(account: []const u8) void {
         std.fmt.bufPrint(&value_bytes[0], "{d}", .{summary.processors}) catch "",
         std.fmt.bufPrint(&value_bytes[1], "{d} MB", .{summary.pages * 4 / 1024}) catch "",
         std.fmt.bufPrint(&value_bytes[2], "{d} x {d}", .{ screen.width, screen.height }) catch "",
-        if (minutes < 60) std.fmt.bufPrint(&value_bytes[3], "{d} min", .{minutes}) catch "" else std.fmt.bufPrint(&value_bytes[3], "{d} h {d} min", .{ minutes / 60, minutes % 60 }) catch "",
+        std.fmt.bufPrint(&value_bytes[3], "{s}, {s}", .{ adapter.name(), adapter.rendering() }) catch "",
+        if (minutes < 60) std.fmt.bufPrint(&value_bytes[4], "{d} min", .{minutes}) catch "" else std.fmt.bufPrint(&value_bytes[4], "{d} h {d} min", .{ minutes / 60, minutes % 60 }) catch "",
         user,
 
     };

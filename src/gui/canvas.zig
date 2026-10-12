@@ -111,7 +111,7 @@ pub const Alignment = enum {
 
 };
 
-const Bounds = struct {
+pub const Bounds = struct {
 
     left: usize,
     top: usize,
@@ -133,6 +133,120 @@ pub fn opacity(color: u32) f32 {
     return @as(f32, @floatFromInt(255 - (color >> 24))) / 255;
 
 }
+
+/// The side of the largest shadow corner: its radius plus twice its blur.
+pub const penumbra = 96;
+
+/// The widest blur a shadow takes; wider ones soften this far.
+pub const widest = 32;
+
+/// A soft shadow fitted to its area: a shape with corners of `radius`, blurred over `blur` pixels either side of its edge.
+/// It draws as four corners `side` pixels square, cut from one tile, and edges stretched from that tile's innermost row and column; its middle is left to whatever casts it.
+pub const Shadow = struct {
+
+    radius: u32,
+    blur: u32,
+
+    /// The shadow of `area` with corners of `radius`, softened over up to `blur` pixels; null when nothing is left to soften.
+    pub fn fit(area: Rect, radius: i32, blur: i32) ?Shadow {
+
+        const short = @min(area.width, area.height);
+        const r = std.math.clamp(radius, 0, @divTrunc(short, 2));
+
+        // Corners must not overlap, so a small area softens less; the tile also caps both.
+        const b = @min(blur, widest, @divTrunc(short - 2 * r, 2), @divTrunc(penumbra - r, 2));
+
+        if (b <= 0 or r + 2 * b > penumbra) return null;
+
+        return .{
+
+            .radius = @intCast(r),
+            .blur = @intCast(b),
+
+        };
+
+    }
+
+    pub fn side(self: Shadow) u32 {
+
+        return self.radius + 2 * self.blur;
+
+    }
+
+    /// Fills `tile`, `side` squared, with how much the shadow covers each pixel of its top-left corner, from the outer corner inwards; `scratch` holds `side` by `side + blur`.
+    pub fn soften(self: Shadow, tile: []f32, scratch: []f32) void {
+
+        const n = self.side();
+        const b: f32 = @floatFromInt(self.blur);
+        const r: f32 = @floatFromInt(self.radius);
+        const reach: i32 = @intCast(self.blur);
+        var weights: [2 * widest + 1]f32 = undefined;
+        var total: f32 = 0;
+
+        // A Gaussian whose three standard deviations span the blur, normalised over the samples taken.
+        for (0..2 * self.blur + 1) |index| {
+
+            const k = @as(f32, @floatFromInt(index)) - b;
+
+            weights[index] = @exp(-k * k * 4.5 / (b * b));
+            total += weights[index];
+
+        }
+
+        for (weights[0 .. 2 * self.blur + 1]) |*weight| weight.* /= total;
+
+        // The blur is separable: across each row of the sharp shape first, then down each column of that.
+        for (0..n + self.blur) |y| {
+
+            for (0..n) |x| {
+
+                var sum: f32 = 0;
+
+                for (weights[0 .. 2 * self.blur + 1], 0..) |weight, index| {
+
+                    const px = @as(f32, @floatFromInt(@as(i32, @intCast(x)) + @as(i32, @intCast(index)) - reach)) + 0.5;
+                    const qx = b + r - px;
+                    const qy = b + r - (@as(f32, @floatFromInt(y)) + 0.5);
+                    const distance = std.math.hypot(@max(qx, 0), @max(qy, 0)) + @min(@max(qx, qy), 0) - r;
+
+                    sum += weight * std.math.clamp(0.5 - distance, 0, 1);
+
+                }
+
+                scratch[y * n + x] = sum;
+
+            }
+
+        }
+
+        for (0..n) |y| {
+
+            for (0..n) |x| {
+
+                var sum: f32 = 0;
+
+                for (weights[0 .. 2 * self.blur + 1], 0..) |weight, index| {
+
+                    const row = @as(i32, @intCast(y)) + @as(i32, @intCast(index)) - reach;
+
+                    if (row >= 0) sum += weight * scratch[@as(usize, @intCast(row)) * n + x];
+
+                }
+
+                tile[y * n + x] = sum;
+
+            }
+
+        }
+
+    }
+
+};
+
+/// The last shadow tile the CPU softened, kept since shadows repeat.
+var softened: [penumbra * penumbra]f32 = undefined;
+var softened_scratch: [penumbra * (penumbra + widest)]f32 = undefined;
+var softened_for: ?Shadow = null;
 
 /// What lay under the bottom corners of an area before drawing in it; see `Canvas.save`.
 pub const Corners = struct {
@@ -222,6 +336,44 @@ pub const Canvas = struct {
                 const inside = if (dx == 0 and dy == 0) 1 else r - @sqrt(dx * dx + dy * dy) + 0.5;
 
                 blend(&row[x], color, @min(inside, 1) * alpha);
+
+            }
+
+        }
+
+    }
+
+    /// Lays a soft shadow of `area`, with corners of `radius`, over `blur` pixels either side of its edge; the middle is left for whatever casts it.
+    pub fn shadow(self: *Canvas, area: Rect, radius: i32, blur: i32, color: u32) void {
+
+        const fit = Shadow.fit(area, radius, blur) orelse return;
+        const side: i32 = @intCast(fit.side());
+        const outer = area.inset(-@as(i32, @intCast(fit.blur)));
+        const clipped = self.clip(outer) orelse return;
+        const alpha = opacity(color);
+
+        if (!std.meta.eql(softened_for, fit)) {
+
+            fit.soften(&softened, &softened_scratch);
+            softened_for = fit;
+
+        }
+
+        for (clipped.top..clipped.bottom) |y| {
+
+            const fy: i32 = @intCast(y);
+            const down = @min(fy - outer.y, outer.bottom() - 1 - fy);
+            const row = @min(down, side - 1);
+
+            for (clipped.left..clipped.right) |x| {
+
+                const fx: i32 = @intCast(x);
+                const across = @min(fx - outer.x, outer.right() - 1 - fx);
+
+                // Deep inside on both axes is the middle, which the caster covers.
+                if (down >= side and across >= side) continue;
+
+                blend(&self.pixels[y * self.width + x], color, softened[@as(usize, @intCast(row * side + @min(across, side - 1)))] * alpha);
 
             }
 
@@ -398,16 +550,23 @@ pub const Canvas = struct {
         const clipped = self.clip(area) orelse return;
         if (source.width == 0 or source.height == 0) return;
 
+        // Columns step through the source in 16.16 fixed point, rather than dividing for every pixel.
+        const step = (@as(u64, source.width) << 16) / @as(u64, @intCast(area.width));
+        const offset: u64 = @intCast(@as(i64, @intCast(clipped.left)) - area.x);
+        const first = offset * source.width * 65536 / @as(u64, @intCast(area.width));
+
         for (clipped.top..clipped.bottom) |y| {
 
             const row = @divTrunc((@as(i64, @intCast(y)) - area.y) * @as(i64, @intCast(source.height)), area.height);
             const line = source.pixels[@as(usize, @intCast(row)) * source.width ..][0..source.width];
+            var along = first;
 
             for (clipped.left..clipped.right) |x| {
 
-                const column = @divTrunc((@as(i64, @intCast(x)) - area.x) * @as(i64, @intCast(source.width)), area.width);
-                const pixel = line[@intCast(column)];
+                const pixel = line[@min(along >> 16, source.width - 1)];
                 const target = &self.pixels[y * self.width + x];
+
+                along += step;
                 const keep = 255 - (pixel >> 24);
 
                 if (keep == 0) {
@@ -429,13 +588,39 @@ pub const Canvas = struct {
 
     }
 
+    /// Blends `color` over every pixel `shape` touches inside the limit, as far as it covers it; `shape` gives `box` and `distance`, as `sketch.Form` does.
+    pub fn cover(self: *Canvas, color: u32, shape: anytype) void {
+
+        const visible = self.region() orelse return;
+        const area = touched(shape.box(), visible) orelse return;
+        const alpha = opacity(color);
+
+        for (area.top..area.bottom) |y| {
+
+            const row = self.pixels[y * self.width ..];
+            const fy = @as(f32, @floatFromInt(y)) + 0.5;
+
+            for (area.left..area.right) |x| blend(&row[x], color, std.math.clamp(0.5 - shape.distance(@as(f32, @floatFromInt(x)) + 0.5, fy), 0, 1) * alpha);
+
+        }
+
+    }
+
+    /// Blends `color` over pixel (`x`, `y`), `alpha` opaque.
+    pub fn mix(self: *Canvas, x: usize, y: usize, color: u32, alpha: f32) void {
+
+        blend(&self.pixels[y * self.width + x], color, alpha);
+
+    }
+
     fn at(self: *Canvas, point: Point) *u32 {
 
         return &self.pixels[@as(usize, @intCast(point.y)) * self.width + @as(usize, @intCast(point.x))];
 
     }
 
-    fn region(self: *const Canvas) ?Rect {
+    /// Where drawing may land: the limit within the canvas.
+    pub fn region(self: *const Canvas) ?Rect {
 
         const limit = self.limit orelse return self.bounds();
 
@@ -459,6 +644,27 @@ pub const Canvas = struct {
     }
 
 };
+
+/// Pixel rows and columns a box (left, top, right, bottom) of an anti-aliased shape touches inside `limit`.
+pub fn touched(box: [4]f32, limit: Rect) ?Bounds {
+
+    const left = std.math.clamp(@floor(box[0] - 1), @as(f32, @floatFromInt(limit.x)), @as(f32, @floatFromInt(limit.right())));
+    const top = std.math.clamp(@floor(box[1] - 1), @as(f32, @floatFromInt(limit.y)), @as(f32, @floatFromInt(limit.bottom())));
+    const right = std.math.clamp(@ceil(box[2] + 1), @as(f32, @floatFromInt(limit.x)), @as(f32, @floatFromInt(limit.right())));
+    const bottom = std.math.clamp(@ceil(box[3] + 1), @as(f32, @floatFromInt(limit.y)), @as(f32, @floatFromInt(limit.bottom())));
+
+    if (right <= left or bottom <= top) return null;
+
+    return .{
+
+        .left = @intFromFloat(left),
+        .top = @intFromFloat(top),
+        .right = @intFromFloat(right),
+        .bottom = @intFromFloat(bottom),
+
+    };
+
+}
 
 /// Where a label's baseline starts so it sits vertically centred in `area`.
 pub fn anchor(face: *const font.Font, string: []const u8, size: f32, area: Rect, alignment: Alignment) Point {

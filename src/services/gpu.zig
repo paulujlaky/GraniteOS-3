@@ -156,8 +156,8 @@ const solid = 4;
 const half = solid;
 
 const vertex_pages = 512;
-const quad_bytes = 6 * @sizeOf(Vertex);
-const quads = vertex_pages * 4096 / quad_bytes;
+const triangle_bytes = 3 * @sizeOf(Vertex);
+const triangles = vertex_pages * 4096 / triangle_bytes;
 
 // Larger corners than this draw square; no window rounds them that much.
 const largest_corner = 64;
@@ -191,13 +191,29 @@ const Kind = enum(u2) {
 
     corner,
     glyph,
-    patch,
+    shadow,
 
 };
 
 // The shape cache and page tables, kept outside `Gpu` so passing one around copies little on a small stack.
 var slots = [_]Slot{.{}} ** 2048;
 var maps = [_]Paging{.{}} ** objects;
+
+/// A shape's outline, or a curve moved onto the target, while it becomes triangles.
+var outline: [gui.sketch.most + 1][2]f32 = undefined;
+
+/// A corner of a triangle on the target, in pixels, and its premultiplied colour, which the GPU blends smoothly between corners.
+const Corner = struct {
+
+    x: f32,
+    y: f32,
+    color: u32,
+
+};
+
+/// Room to soften a shadow corner in before it goes into the atlas.
+var softening: [gui.canvas.penumbra * gui.canvas.penumbra]f32 = undefined;
+var softening_scratch: [gui.canvas.penumbra * (gui.canvas.penumbra + gui.canvas.widest)]f32 = undefined;
 
 
 /// The size each image texture was defined at, zero while undefined, and our copy of its pixels.
@@ -226,7 +242,7 @@ pub const Gpu = struct {
     columns: u32 = 0,
     rows: u32 = 0,
 
-    /// Quads staged since the last draw, and whether the device may still be reading staged ones.
+    /// Triangles staged since the last draw, and whether the device may still be reading staged ones.
     count: usize = 0,
     busy: bool = false,
 
@@ -410,6 +426,9 @@ pub const Gpu = struct {
                 .shape => |shape| self.rounded(gui.draw.move(shape.area, origin), shape.radius, shape.color, limit.intersect(gui.draw.move(shape.clip, origin)) orelse continue),
                 .text => |line| self.write(line.string, line.face, line.size, line.x + origin.x, line.baseline + origin.y, line.color, limit.intersect(gui.draw.move(line.clip, origin)) orelse continue),
                 .image => |shown| self.picture(images(shown.handle) orelse continue, gui.draw.move(shown.area, origin), limit.intersect(gui.draw.move(shown.clip, origin)) orelse continue),
+                .shadow => |soft| self.shadow(gui.draw.move(soft.area, origin), soft.radius, soft.blur, soft.color, limit.intersect(gui.draw.move(soft.clip, origin)) orelse continue),
+                .form => |mark| self.form(mark.form.moved(@floatFromInt(origin.x), @floatFromInt(origin.y)), mark.color, limit.intersect(gui.draw.move(mark.clip, origin)) orelse continue),
+                .curve => |line| self.curve(line.points, origin, line.width, line.color, line.under, limit.intersect(gui.draw.move(line.clip, origin)) orelse continue),
 
             }
 
@@ -417,13 +436,21 @@ pub const Gpu = struct {
 
     }
 
-    /// Makes `pixels`, `width` by `height` premultiplied, the texture of image `slot`, or refreshes it.
-    pub fn upload(self: *Gpu, slot: usize, pixels: []const u32, width: u32, height: u32) void {
+    /// Makes `pixels`, `width` by `height` premultiplied, the texture of image `slot`, or refreshes the `changed` part of it.
+    pub fn upload(self: *Gpu, slot: usize, pixels: []const u32, width: u32, height: u32, changed: gui.Rect) void {
 
         const id: u32 = @intCast(pictures + slot);
+        const fresh = defined[slot][0] != width or defined[slot][1] != height;
+        const whole = gui.Rect{
+
+            .width = @intCast(width),
+            .height = @intCast(height),
+
+        };
+        const area = if (fresh) whole else changed.intersect(whole) orelse return;
 
         // The device reads our own copy, so a client can neither change nor free what it is drawing.
-        if (defined[slot][0] != width or defined[slot][1] != height) {
+        if (fresh) {
 
             self.discard(slot);
 
@@ -446,8 +473,13 @@ pub const Gpu = struct {
 
         }
 
-        @memcpy(std.mem.bytesAsSlice(u32, copies[slot].?.bytes[0 .. pixels.len * 4]), pixels);
-        self.update(id, 0, 0, width, height);
+        const copy = std.mem.bytesAsSlice(u32, copies[slot].?.bytes[0 .. pixels.len * 4]);
+        const left: usize = @intCast(area.x);
+        const span: usize = @intCast(area.width);
+
+        for (@intCast(area.y)..@intCast(area.bottom())) |y| @memcpy(copy[y * width + left ..][0..span], pixels[y * width + left ..][0..span]);
+
+        self.update(id, @intCast(area.x), @intCast(area.y), @intCast(area.width), @intCast(area.height));
 
     }
 
@@ -481,85 +513,6 @@ pub const Gpu = struct {
         // Source then destination as surface, face, and mipmap, then one box: x, y, z, width, height, depth, and where it starts in the source.
         self.device.submit(surface_copy, &.{ canvas, 0, 0, frame, 0, 0, x, y, 0, @intCast(area.width), @intCast(area.height), 1, x, y, 0 });
         self.device.submit(update_target, &.{ 0, x, y, @intCast(area.width), @intCast(area.height) });
-
-    }
-
-    /// Lays `areas` of `source`, a frame drawn on the CPU, over everything drawn so far; each at most `largest_corner` square.
-    pub fn patch(self: *Gpu, source: *const gui.Canvas, areas: []const gui.Rect) void {
-
-        if (areas.len == 0) return;
-
-        const key = pack(.patch, 0, 0, 0);
-        const reserved = cached(key) orelse self.insert(key, largest_corner, largest_corner) orelse return;
-        const texels = std.mem.bytesAsSlice(u32, self.atlas.bytes);
-        var at = gui.Point{};
-        var shelf: i32 = 0;
-
-        // Patches share one atlas square, laid out in rows; staged quads and the device may still read the last ones.
-        self.flush();
-        self.device.idle();
-        self.busy = false;
-
-        for (areas) |area| {
-
-            const shown = gui.Rect{
-
-                .x = area.x,
-                .y = area.y,
-                .width = @min(area.width, largest_corner),
-                .height = @min(area.height, largest_corner),
-
-            };
-
-            if (at.x + shown.width > largest_corner) at = .{
-
-                .y = at.y + shelf,
-
-            };
-
-            if (at.y + shown.height > largest_corner) {
-
-                self.flush();
-                self.device.idle();
-                self.busy = false;
-                at = .{};
-
-            }
-
-            if (at.x == 0) shelf = 0;
-
-            const slot = Slot{
-
-                .x = reserved.x + @as(u32, @intCast(at.x)),
-                .y = reserved.y + @as(u32, @intCast(at.y)),
-                .width = @intCast(shown.width),
-                .height = @intCast(shown.height),
-
-            };
-
-            for (0..slot.height) |y| {
-
-                const row = source.pixels[(@as(usize, @intCast(area.y)) + y) * source.width + @as(usize, @intCast(area.x)) ..];
-
-                for (0..slot.width) |x| texels[(slot.y + y) * atlas_size + slot.x + x] = 0xff000000 | row[x];
-
-            }
-
-            self.dirty = self.dirty.join(.{
-
-                .x = @intCast(slot.x),
-                .y = @intCast(slot.y),
-                .width = shown.width,
-                .height = shown.height,
-
-            });
-            self.quad(shown, slot, false, false, 0xffffff, shown);
-            at.x += shown.width;
-            shelf = @max(shelf, shown.height);
-
-        }
-
-        self.flush();
 
     }
 
@@ -709,6 +662,104 @@ pub const Gpu = struct {
 
     }
 
+    /// Lays a soft shadow as `Canvas.shadow` does: four corners from one softened tile, and edges stretched from its innermost row and column.
+    fn shadow(self: *Gpu, area: gui.Rect, radius: i32, blur: i32, color: u32, clip: gui.Rect) void {
+
+        const fit = gui.canvas.Shadow.fit(area, radius, blur) orelse return;
+        const slot = self.blurred(fit) orelse return;
+        const side: i32 = @intCast(fit.side());
+        const outer = area.inset(-@as(i32, @intCast(fit.blur)));
+        const across = outer.width - 2 * side;
+        const down = outer.height - 2 * side;
+
+        for ([_]bool{ false, true }) |far| {
+
+            for ([_]bool{ false, true }) |right| {
+
+                self.quad(.{
+
+                    .x = if (right) outer.right() - side else outer.x,
+                    .y = if (far) outer.bottom() - side else outer.y,
+                    .width = side,
+                    .height = side,
+
+                }, slot, right, far, color, clip);
+
+            }
+
+            // The top and bottom edges repeat the tile's innermost column, the sides its innermost row.
+            if (across > 0) self.band(.{
+
+                .x = outer.x + side,
+                .y = if (far) outer.bottom() - side else outer.y,
+                .width = across,
+                .height = side,
+
+            }, .{
+
+                .x = slot.x + slot.width - 1,
+                .y = slot.y,
+                .width = 1,
+                .height = slot.height,
+
+            }, far, color, clip);
+
+            if (down > 0) self.band(.{
+
+                .x = if (far) outer.right() - side else outer.x,
+                .y = outer.y + side,
+                .width = side,
+                .height = down,
+
+            }, .{
+
+                .x = slot.x,
+                .y = slot.y + slot.height - 1,
+                .width = slot.width,
+                .height = 1,
+
+            }, far, color, clip);
+
+        }
+
+    }
+
+    /// Stages `area` sampling `strip`, one texel thick, along its length, and repeating it across; `mirror` reads it from the far end.
+    fn band(self: *Gpu, area: gui.Rect, strip: Slot, mirror: bool, color: u32, clip: gui.Rect) void {
+
+        const visible = area.intersect(clip) orelse return;
+        const across = strip.width == 1;
+        const middle = (@as(f32, @floatFromInt(if (across) strip.x else strip.y)) + 0.5) / atlas_size;
+        const fixed = [2]f32{ middle, middle };
+        const u = if (across) fixed else [2]f32{ texel(strip.x, strip.width, visible.x - area.x, mirror), texel(strip.x, strip.width, visible.right() - area.x, mirror) };
+        const v = if (!across) fixed else [2]f32{ texel(strip.y, strip.height, visible.y - area.y, mirror), texel(strip.y, strip.height, visible.bottom() - area.y, mirror) };
+
+        self.stage(visible, u, v, premultiplied(color));
+
+    }
+
+    /// The atlas tile for a shadow corner shaped as `fit`, softened on first use.
+    fn blurred(self: *Gpu, fit: gui.canvas.Shadow) ?Slot {
+
+        const key = pack(.shadow, fit.radius << 8 | fit.blur, 0, 0);
+        if (cached(key)) |slot| return slot;
+
+        const n = fit.side();
+        const slot = self.insert(key, n, n) orelse return null;
+        const texels = std.mem.bytesAsSlice(u32, self.atlas.bytes);
+
+        fit.soften(&softening, &softening_scratch);
+
+        for (0..n) |y| {
+
+            for (0..n) |x| texels[(slot.y + y) * atlas_size + slot.x + x] = coverage(softening[y * n + x]);
+
+        }
+
+        return slot;
+
+    }
+
     /// Draws image `slot` stretched over `area`, filtered smoothly.
     fn picture(self: *Gpu, slot: usize, area: gui.Rect, clip: gui.Rect) void {
 
@@ -803,13 +854,7 @@ pub const Gpu = struct {
 
         }
 
-        // Colours carry transparency in their top byte; the blend wants them premultiplied and opaque-alpha.
-        const alpha = 255 - (color >> 24);
-        var tinted = alpha << 24;
-
-        for ([_]u5{ 0, 8, 16 }) |shift| tinted |= (color >> shift & 0xff) * alpha / 255 << shift;
-
-        self.stage(visible, u, v, tinted);
+        self.stage(visible, u, v, premultiplied(color));
 
     }
 
@@ -823,7 +868,32 @@ pub const Gpu = struct {
     /// Stages one quad between pixel edges `box`, as left, top, right, and bottom, which may fall between pixels.
     fn stretch(self: *Gpu, box: [4]f32, u: [2]f32, v: [2]f32, tinted: u32) void {
 
-        if (self.count == quads) self.flush();
+        const left = edge(box[0], self.columns, self.shift);
+        const right = edge(box[2], self.columns, self.shift);
+        const top = -edge(box[1], self.rows, self.shift);
+        const bottom = -edge(box[3], self.rows, self.shift);
+
+        self.emit(.{
+
+            .{ .x = left, .y = top, .u = u[0], .v = v[0], .color = tinted },
+            .{ .x = right, .y = top, .u = u[1], .v = v[0], .color = tinted },
+            .{ .x = right, .y = bottom, .u = u[1], .v = v[1], .color = tinted },
+
+        });
+        self.emit(.{
+
+            .{ .x = left, .y = top, .u = u[0], .v = v[0], .color = tinted },
+            .{ .x = right, .y = bottom, .u = u[1], .v = v[1], .color = tinted },
+            .{ .x = left, .y = bottom, .u = u[0], .v = v[1], .color = tinted },
+
+        });
+
+    }
+
+    /// Stages one triangle, in clip space.
+    fn emit(self: *Gpu, corners: [3]Vertex) void {
+
+        if (self.count == triangles) self.flush();
 
         // The device may still be copying the last batch out of the staging memory.
         if (self.busy) {
@@ -833,23 +903,255 @@ pub const Gpu = struct {
 
         }
 
-        const left = edge(box[0], self.columns, self.shift);
-        const right = edge(box[2], self.columns, self.shift);
-        const top = -edge(box[1], self.rows, self.shift);
-        const bottom = -edge(box[3], self.rows, self.shift);
-        const staged: *[6]Vertex = @ptrCast(@alignCast(self.vertices.bytes[self.count * quad_bytes ..][0..quad_bytes]));
+        const staged: *[3]Vertex = @ptrCast(@alignCast(self.vertices.bytes[self.count * triangle_bytes ..][0..triangle_bytes]));
 
-        staged.* = .{
+        staged.* = corners;
+        self.count += 1;
 
-            .{ .x = left, .y = top, .u = u[0], .v = v[0], .color = tinted },
-            .{ .x = right, .y = top, .u = u[1], .v = v[0], .color = tinted },
-            .{ .x = right, .y = bottom, .u = u[1], .v = v[1], .color = tinted },
-            .{ .x = left, .y = top, .u = u[0], .v = v[0], .color = tinted },
-            .{ .x = right, .y = bottom, .u = u[1], .v = v[1], .color = tinted },
-            .{ .x = left, .y = bottom, .u = u[0], .v = v[1], .color = tinted },
+    }
+
+    /// Draws `shape` as triangles whose corners fade to clear across its edges, so they come out anti-aliased.
+    fn form(self: *Gpu, shape: gui.sketch.Form, color: u32, clip: gui.Rect) void {
+
+        const drawn = shape.path(&outline);
+
+        self.trace(drawn.points, drawn.closed, drawn.half, premultiplied(color), clip);
+
+    }
+
+    /// Draws a line through `points`, moved by `origin`, over the shaded area `under` it, as `sketch.Sketch.curve` paints them.
+    fn curve(self: *Gpu, points: gui.sketch.Points, origin: gui.Point, width: f32, color: u32, under: ?gui.sketch.Under, clip: gui.Rect) void {
+
+        const dx: f32 = @floatFromInt(origin.x);
+        const dy: f32 = @floatFromInt(origin.y);
+        const moved = outline[0..points.len];
+
+        for (moved, points) |*to, from| to.* = .{ from[0] + dx, from[1] + dy };
+
+        if (under) |area| {
+
+            var shading = area;
+
+            shading.floor += dy;
+            shading.ceiling += dy;
+
+            const left = moved[0][0];
+            const right = moved[moved.len - 1][0];
+
+            // A strip down from each piece of the line to the floor, shaded by height, which corners blend smoothly.
+            for (moved[0 .. moved.len - 1], moved[1..]) |a, b| {
+
+                const floors = [2]f32{ shading.bottom(a[0], left, right), shading.bottom(b[0], left, right) };
+
+                self.four(.{
+
+                    .{ .x = a[0], .y = a[1], .color = premultiplied(shading.color(a[1])) },
+                    .{ .x = b[0], .y = b[1], .color = premultiplied(shading.color(b[1])) },
+                    .{ .x = b[0], .y = floors[1], .color = premultiplied(shading.color(floors[1])) },
+                    .{ .x = a[0], .y = floors[0], .color = premultiplied(shading.color(floors[0])) },
+
+                }, clip);
+
+            }
+
+        }
+
+        self.trace(moved, false, width / 2, premultiplied(color), clip);
+
+    }
+
+    /// Fills the polygon `points` when `half` is zero, else draws a band `half` either side of them, closing them into a loop or capping both ends round.
+    fn trace(self: *Gpu, points: []const [2]f32, closed: bool, breadth: f32, ink: u32, clip: gui.Rect) void {
+
+        if (points.len < 2) return;
+
+        const count = points.len;
+
+        if (breadth == 0) {
+
+            if (count < 3) return;
+
+            var area: f32 = 0;
+            var centre = [2]f32{ 0, 0 };
+
+            for (points, 0..) |point, index| {
+
+                const next = points[(index + 1) % count];
+
+                area += point[0] * next[1] - next[0] * point[1];
+                centre = .{ centre[0] + point[0], centre[1] + point[1] };
+
+            }
+
+            const middle = Corner{
+
+                .x = centre[0] / @as(f32, @floatFromInt(count)),
+                .y = centre[1] / @as(f32, @floatFromInt(count)),
+                .color = ink,
+
+            };
+            const outward: f32 = if (area > 0) 1 else -1;
+
+            // A fan inside the edge, and a pixel-wide band across it fading out.
+            for (0..count) |index| {
+
+                const next = (index + 1) % count;
+                const here = miter(points, index, true, outward);
+                const there = miter(points, next, true, outward);
+                const a = shifted(points[index], here, -0.5, ink);
+                const b = shifted(points[next], there, -0.5, ink);
+
+                self.triangle(.{ middle, a, b }, clip);
+                self.four(.{ a, b, shifted(points[next], there, 0.5, 0), shifted(points[index], here, 0.5, 0) }, clip);
+
+            }
+
+            return;
+
+        }
+
+        // A line thinner than a pixel draws a pixel wide, as faint as it is thin.
+        const thin = breadth < 0.5;
+        const reach = if (thin) 0.5 else breadth;
+        const color = if (thin) faded(ink, breadth * 2) else ink;
+        const rails = [4]f32{ reach + 0.5, reach - 0.5, 0.5 - reach, -reach - 0.5 };
+        const shades = [4]u32{ 0, color, color, 0 };
+        const segments = if (closed) count else count - 1;
+
+        for (0..segments) |index| {
+
+            const next = (index + 1) % count;
+            const here = miter(points, index, closed, 1);
+            const there = miter(points, next, closed, 1);
+
+            for (0..3) |rail| {
+
+                self.four(.{
+
+                    shifted(points[index], here, rails[rail], shades[rail]),
+                    shifted(points[next], there, rails[rail], shades[rail]),
+                    shifted(points[next], there, rails[rail + 1], shades[rail + 1]),
+                    shifted(points[index], here, rails[rail + 1], shades[rail + 1]),
+
+                }, clip);
+
+            }
+
+        }
+
+        if (closed) return;
+
+        // Round ends: breadth discs pointing away from the line.
+        for ([_][2]usize{ .{ 0, 1 }, .{ count - 1, count - 2 } }) |ends| {
+
+            const end = points[ends[0]];
+            const length = @max(std.math.hypot(end[0] - points[ends[1]][0], end[1] - points[ends[1]][1]), 1e-6);
+            const away = [2]f32{ (end[0] - points[ends[1]][0]) / length, (end[1] - points[ends[1]][1]) / length };
+            const side = [2]f32{ away[1], -away[0] };
+            const steps: usize = @intFromFloat(std.math.clamp(@ceil(std.math.pi * @sqrt(10 * reach) / 2), 3, 64));
+            const middle = Corner{
+
+                .x = end[0],
+                .y = end[1],
+                .color = color,
+
+            };
+
+            for (0..steps) |step| {
+
+                var turn: [2][2]f32 = undefined;
+
+                for (&turn, 0..) |*direction, which| {
+
+                    const angle = (@as(f32, @floatFromInt(step + which)) / @as(f32, @floatFromInt(steps)) - 0.5) * std.math.pi;
+
+                    direction.* = .{ @cos(angle) * away[0] + @sin(angle) * side[0], @cos(angle) * away[1] + @sin(angle) * side[1] };
+
+                }
+
+                const a = shifted(end, turn[0], reach - 0.5, color);
+                const b = shifted(end, turn[1], reach - 0.5, color);
+
+                self.triangle(.{ middle, a, b }, clip);
+                self.four(.{ a, b, shifted(end, turn[1], reach + 0.5, 0), shifted(end, turn[0], reach + 0.5, 0) }, clip);
+
+            }
+
+        }
+
+    }
+
+    /// Stages the quadrilateral `corners` within `clip`, as two triangles.
+    fn four(self: *Gpu, corners: [4]Corner, clip: gui.Rect) void {
+
+        self.triangle(.{ corners[0], corners[1], corners[2] }, clip);
+        self.triangle(.{ corners[0], corners[2], corners[3] }, clip);
+
+    }
+
+    /// Stages a triangle cut to `clip`, its corners' colours blending across it; cutting may leave up to six more corners, drawn as a fan.
+    fn triangle(self: *Gpu, corners: [3]Corner, clip: gui.Rect) void {
+
+        const bounds = [4]f32{ @floatFromInt(clip.x), @floatFromInt(clip.y), @floatFromInt(clip.right()), @floatFromInt(clip.bottom()) };
+        var polygon: [9]Corner = undefined;
+        var count: usize = 3;
+
+        @memcpy(polygon[0..3], &corners);
+
+        // Each side of the clip in turn keeps what lies inside it, adding a corner where an edge crosses it.
+        for (0..4) |side| {
+
+            var kept: [9]Corner = undefined;
+            var total: usize = 0;
+
+            for (0..count) |index| {
+
+                const a = polygon[index];
+                const b = polygon[(index + 1) % count];
+                const da = inset(a, side, bounds);
+                const db = inset(b, side, bounds);
+
+                if (da >= 0) {
+
+                    kept[total] = a;
+                    total += 1;
+
+                }
+
+                if ((da >= 0) != (db >= 0) and total < kept.len) {
+
+                    kept[total] = between(a, b, da / (da - db));
+                    total += 1;
+
+                }
+
+            }
+
+            if (total < 3) return;
+
+            polygon = kept;
+            count = total;
+
+        }
+
+        for (1..count - 1) |index| self.emit(.{ self.vertex(polygon[0]), self.vertex(polygon[index]), self.vertex(polygon[index + 1]) });
+
+    }
+
+    /// A corner placed on the target, sampling the solid block.
+    fn vertex(self: *const Gpu, point: Corner) Vertex {
+
+        const centre: f32 = @as(f32, solid / 2) / atlas_size;
+
+        return .{
+
+            .x = edge(point.x, self.columns, self.shift),
+            .y = -edge(point.y, self.rows, self.shift),
+            .u = centre,
+            .v = centre,
+            .color = point.color,
 
         };
-        self.count += 1;
 
     }
 
@@ -867,7 +1169,7 @@ pub const Gpu = struct {
 
         const stride = @sizeOf(Vertex);
 
-        self.update(vertices, 0, 0, @intCast(self.count * quad_bytes), 1);
+        self.update(vertices, 0, 0, @intCast(self.count * triangle_bytes), 1);
 
         // Three arrays read the interleaved position, texture coordinate, and colour, then one unindexed range of triangles.
         self.device.submit(draw, &.{
@@ -876,7 +1178,7 @@ pub const Gpu = struct {
             float2, 0, position, 0, vertices, 0, stride, 0, 0,
             float2, 0, texcoord, 0, vertices, 8, stride, 0, 0,
             packed_color, 0, vertex_color, 0, vertices, 16, stride, 0, 0,
-            triangle_list, @intCast(self.count * 2), no_id, 0, 0, 0, 0,
+            triangle_list, @intCast(self.count), no_id, 0, 0, 0, 0,
 
         });
 
@@ -1238,6 +1540,109 @@ pub fn texel(start: u32, span: u32, offset: i32, mirror: bool) f32 {
     const along: i32 = if (mirror) @as(i32, @intCast(span)) - offset else offset;
 
     return @as(f32, @floatFromInt(@as(i32, @intCast(start)) + along)) / atlas_size;
+
+}
+
+/// How far to move point `index` of `points` to put it `1` pixel off the line through it, along the bisector of its two edges so offset lines meet;
+/// `outward` is 1 or -1, picking the side; the ends of an open line use their one edge.
+fn miter(points: []const [2]f32, index: usize, closed: bool, outward: f32) [2]f32 {
+
+    const count = points.len;
+    const before: ?usize = if (index > 0) index - 1 else if (closed) count - 1 else null;
+    const after: ?usize = if (index + 1 < count) index + 1 else if (closed) 0 else null;
+    const first = normal(points, before orelse index, if (before) |_| index else after.?, outward);
+    const second = normal(points, if (after) |_| index else before.?, after orelse index, outward);
+    const sum = [2]f32{ first[0] + second[0], first[1] + second[1] };
+    const scale = 1 + first[0] * second[0] + first[1] * second[1];
+
+    // A hairpin would shoot the corner far away, so the miter stops at four pixels.
+    if (scale < 0.125) return first;
+
+    return .{ sum[0] / scale, sum[1] / scale };
+
+}
+
+/// The unit normal of the edge from point `from` to point `to`, turned to the `outward` side.
+fn normal(points: []const [2]f32, from: usize, to: usize, outward: f32) [2]f32 {
+
+    const dx = points[to][0] - points[from][0];
+    const dy = points[to][1] - points[from][1];
+    const length = @max(std.math.hypot(dx, dy), 1e-6);
+
+    return .{ outward * dy / length, -outward * dx / length };
+
+}
+
+fn shifted(point: [2]f32, direction: [2]f32, distance: f32, color: u32) Corner {
+
+    return .{
+
+        .x = point[0] + direction[0] * distance,
+        .y = point[1] + direction[1] * distance,
+        .color = color,
+
+    };
+
+}
+
+/// How far `corner` sits inside side `side` (left, top, right, bottom) of `bounds`; negative outside.
+fn inset(corner: Corner, side: usize, bounds: [4]f32) f32 {
+
+    return switch (side) {
+
+        0 => corner.x - bounds[0],
+        1 => corner.y - bounds[1],
+        2 => bounds[2] - corner.x,
+        else => bounds[3] - corner.y,
+
+    };
+
+}
+
+/// The corner `t` of the way from `a` to `b`, its colour blended as the GPU would.
+fn between(a: Corner, b: Corner, t: f32) Corner {
+
+    var color: u32 = 0;
+
+    for ([_]u5{ 0, 8, 16, 24 }) |shift| {
+
+        const from: f32 = @floatFromInt(a.color >> shift & 0xff);
+        const to: f32 = @floatFromInt(b.color >> shift & 0xff);
+
+        color |= @as(u32, @intFromFloat(std.math.clamp(from + (to - from) * t + 0.5, 0, 255))) << shift;
+
+    }
+
+    return .{
+
+        .x = a.x + (b.x - a.x) * t,
+        .y = a.y + (b.y - a.y) * t,
+        .color = color,
+
+    };
+
+}
+
+/// Premultiplied `tint` made `amount` as opaque.
+fn faded(color: u32, amount: f32) u32 {
+
+    var scaled: u32 = 0;
+
+    for ([_]u5{ 0, 8, 16, 24 }) |shift| scaled |= @as(u32, @intFromFloat(@as(f32, @floatFromInt(color >> shift & 0xff)) * std.math.clamp(amount, 0, 1) + 0.5)) << shift;
+
+    return scaled;
+
+}
+
+/// Colours carry transparency in their top byte; the blend wants them premultiplied, with opacity as alpha.
+fn premultiplied(color: u32) u32 {
+
+    const alpha = 255 - (color >> 24);
+    var tinted = alpha << 24;
+
+    for ([_]u5{ 0, 8, 16 }) |shift| tinted |= (color >> shift & 0xff) * alpha / 255 << shift;
+
+    return tinted;
 
 }
 

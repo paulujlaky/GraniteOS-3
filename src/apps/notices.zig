@@ -2,7 +2,6 @@
 
 const std = @import("std");
 
-const menu = @import("menu.zig");
 
 const api = @import("api");
 const gui = @import("gui");
@@ -69,7 +68,7 @@ pub fn init(screen: gui.Rect, top: i32) void {
 
         }, &toast.words);
         toast.parts = .{ &toast.icon, &toast.text };
-        toast.node = gui.box(menu.popup.with(.{
+        toast.node = gui.box(theme.popup.with(.{
 
             .height = tall,
             .padding = gui.Edges.axes(0, theme.spacing),

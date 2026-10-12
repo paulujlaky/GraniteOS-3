@@ -5,7 +5,6 @@ const std = @import("std");
 const about = @import("about.zig");
 const catalog = @import("catalog.zig");
 const clips = @import("clips.zig");
-const menu = @import("menu.zig");
 const notices = @import("notices.zig");
 const switcher = @import("switcher.zig");
 
@@ -156,7 +155,7 @@ var list = gui.box(.{
 
 }, &list_parts);
 var launcher_parts = [_]*gui.Node{ &search, &list };
-var launcher_root = gui.box(menu.popup.with(.{
+var launcher_root = gui.box(theme.popup.with(.{
 
     .padding = gui.Edges.all(theme.spacing),
     .gap = 10,
@@ -164,7 +163,7 @@ var launcher_root = gui.box(menu.popup.with(.{
 }), &launcher_parts);
 
 /// The session menu under the account name, and the wallpaper's right-click menu.
-var account_menu: menu.Menu(&.{
+var account_menu: gui.Menu(&.{
 
     .{ .icon = .lock, .title = "Lock", .run = session.lock },
     .{ .icon = .logout, .title = "Log out", .run = session.logout },
@@ -172,7 +171,7 @@ var account_menu: menu.Menu(&.{
     .{ .icon = .power, .title = "Shut down", .run = shutdown },
 
 }) = .{};
-var desktop_menu: menu.Menu(&.{
+var desktop_menu: gui.Menu(&.{
 
     .{ .icon = .folder, .title = "Files", .run = files_open },
     .{ .icon = .terminal, .title = "Terminal", .run = terminal_open },
@@ -310,10 +309,11 @@ pub fn init() void {
         .height = 420,
         .hidden = true,
         .motion = .drop,
+        .shadow = true,
 
     }) catch api.exit(3);
-    account_menu.init();
-    desktop_menu.init();
+    account_menu.init(null);
+    desktop_menu.init(null);
     notices.init(screen, height);
     switcher.init(screen);
     clips.init(screen);
@@ -422,7 +422,7 @@ pub fn react(input: gui.Input) bool {
                 .x = event.x,
                 .y = event.y,
 
-            }, wallpaper.surface.list.bounds());
+            });
 
         },
         .key => {
@@ -538,12 +538,6 @@ fn place(screen: gui.Rect) void {
 
     });
 
-    account_menu.put(.{
-
-        .x = screen.width,
-        .y = height + margin,
-
-    }, screen);
     notices.place(screen, height);
     switcher.place(screen);
     clips.place(screen);
@@ -707,7 +701,12 @@ fn reveal(_: *gui.Node) void {
 
     dismiss();
     user.selected = true;
-    account_menu.window.show();
+    account_menu.show(.{
+
+        .x = wallpaper.surface.list.width,
+        .y = height + margin,
+
+    });
     bar.refresh();
 
 }

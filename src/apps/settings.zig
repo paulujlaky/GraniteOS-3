@@ -51,7 +51,7 @@ var user: []const u8 = "";
 var home: []const u8 = "/";
 var home_bytes: [64]u8 = undefined;
 
-var prompt = gui.Prompt{};
+var dialog = gui.Dialog{};
 var pending = Pending.none;
 var draft_name: [32]u8 = undefined;
 var draft_length: usize = 0;
@@ -76,7 +76,7 @@ var sidebar = gui.box(.{
 
 // Display.
 var display_title = gui.label("Display", theme.title_text);
-var display_note_bytes: [64]u8 = undefined;
+var display_note_bytes: [160]u8 = undefined;
 var display_note = gui.label("", theme.caption);
 var mode_labels: [modes.len][16]u8 = undefined;
 var mode_rows: [modes.len]gui.Node = undefined;
@@ -191,13 +191,13 @@ var body = gui.box(.{
     .direction = .row,
 
 }, &body_parts);
-var root_parts = [_]*gui.Node{ &prompt.bar, &body };
+var root_parts = [_]*gui.Node{ &body };
 var root = gui.box(.{}, &root_parts);
 
 pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
 
     api.start(environment, .application);
-    prompt.init();
+    dialog.init();
     session = parent;
 
     var argument_bytes: [256]u8 = undefined;
@@ -315,7 +315,7 @@ fn show(section: Section) void {
     }
 
     content.offset = 0;
-    prompt.close();
+    dialog.close();
     window.refresh();
 
 }
@@ -324,7 +324,9 @@ fn describeDisplay(problem: []const u8) void {
 
     const size = screen.size() catch api.display.Area{};
 
-    display_note.content.label = if (problem.len != 0) problem else std.fmt.bufPrint(&display_note_bytes, "Showing {d} x {d}. Administrators can choose another mode.", .{ size.width, size.height }) catch "";
+    const adapter = screen.adapter() catch api.display.Adapter{};
+
+    display_note.content.label = if (problem.len != 0) problem else std.fmt.bufPrint(&display_note_bytes, "Showing {d} x {d} on {s}, {s}. Administrators can choose another mode.", .{ size.width, size.height, adapter.name(), adapter.rendering() }) catch "";
 
     for (modes, 0..) |mode, index| mode_rows[index].selected = mode[0] == size.width and mode[1] == size.height;
 
@@ -465,8 +467,8 @@ fn toggleAdministrator(_: *gui.Node) void {
 fn addAccount(_: *gui.Node) void {
 
     pending = .name;
-    prompt.edit.secret = false;
-    prompt.ask(&window, if (administrator.selected) "New administrator's name" else "New account's name", "", "Next", &advance);
+    dialog.edit.secret = false;
+    dialog.ask(&window, if (administrator.selected) "New administrator's name" else "New account's name", "", "Next", &advance);
 
 }
 
@@ -476,8 +478,8 @@ fn removeAccount(_: *gui.Node) void {
 
     var message: [80]u8 = undefined;
 
-    prompt.edit.secret = false;
-    prompt.check(&window, std.fmt.bufPrint(&message, "Remove {s} and keep their files?", .{selectedName()}) catch "Remove it?", "Remove", &applyRemove);
+    dialog.edit.secret = false;
+    dialog.check(&window, std.fmt.bufPrint(&message, "Remove {s}?", .{selectedName()}) catch "Remove it?", "Their files stay in their home folder.", "Remove", &applyRemove);
 
 }
 
@@ -504,8 +506,8 @@ fn changePassword(_: *gui.Node) void {
 
     pending = if (own) .current else .replacement;
     draft_secret_length = 0;
-    prompt.edit.secret = true;
-    prompt.ask(&window, if (own) "Current password" else "New password", "", "Next", &advance);
+    dialog.edit.secret = true;
+    dialog.ask(&window, if (own) "Current password" else "New password", "", "Next", &advance);
 
 }
 
@@ -516,13 +518,13 @@ fn advance(value: []const u8) void {
 
         .name => {
 
-            if (value.len == 0 or value.len > draft_name.len) return prompt.refuse();
+            if (value.len == 0 or value.len > draft_name.len) return dialog.refuse("Names need 1 to 32 characters.");
 
             @memcpy(draft_name[0..value.len], value);
             draft_length = value.len;
             pending = .password;
-            prompt.edit.secret = true;
-            prompt.ask(&window, "Their password", "", "Create", &advance);
+            dialog.edit.secret = true;
+            dialog.ask(&window, "Their password", "", "Create", &advance);
 
         },
         .password => {
@@ -530,7 +532,7 @@ fn advance(value: []const u8) void {
             accounts.create(draft_name[0..draft_length], value, administrator.selected) catch |err| {
 
                 pending = .none;
-                prompt.edit.secret = false;
+                dialog.edit.secret = false;
                 return say(switch (err) {
 
                     error.Exists => "That name is taken.",
@@ -542,7 +544,7 @@ fn advance(value: []const u8) void {
             };
 
             pending = .none;
-            prompt.edit.secret = false;
+            dialog.edit.secret = false;
             say("Account added.");
             loadAccounts();
 
@@ -552,7 +554,7 @@ fn advance(value: []const u8) void {
             @memcpy(draft_secret[0..@min(value.len, draft_secret.len)], value[0..@min(value.len, draft_secret.len)]);
             draft_secret_length = @min(value.len, draft_secret.len);
             pending = .replacement;
-            prompt.ask(&window, "New password", "", "Change", &advance);
+            dialog.ask(&window, "New password", "", "Change", &advance);
 
         },
         .replacement => {
@@ -560,7 +562,7 @@ fn advance(value: []const u8) void {
             defer std.crypto.secureZero(u8, &draft_secret);
 
             pending = .none;
-            prompt.edit.secret = false;
+            dialog.edit.secret = false;
             if (value.len == 0) return say("Passwords can't be empty.");
 
             accounts.password(selectedName(), value, draft_secret[0..draft_secret_length]) catch |err| return say(if (err == error.Denied) "That password was wrong, or you may not change it." else "Could not change the password.");

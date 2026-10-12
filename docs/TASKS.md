@@ -41,14 +41,14 @@
 ## Milestone 5: Graphics and Desktop
 
 - [x] VMware keyboard/mouse support.
-- [ ] USB keyboard/mouse support.
+- [x] USB keyboard/mouse support (xHCI and HID; physical validation is deferred).
 - [x] VMware display support.
-- [ ] Intel UHD 630 display support.
+- [ ] Intel UHD 630 display support (detected and read over the firmware framebuffer; driving it awaits physical validation).
 - [ ] GPU-accelerated rendering wherever supported (VMware done; Intel pending).
 - [x] Graphical login and screen locking.
 - [x] Window management and a shared widget toolkit.
 - [x] Desktop shell and application launching.
-- [ ] Desktop responsiveness, rendering, and usability improvements over GraniteOS 2.
+- [x] Desktop responsiveness, rendering, and usability improvements over GraniteOS 2.
 - [x] File manager, editor, image viewer, settings, and system monitoring.
 - [x] Remaining GraniteOS 2 desktop utilities with independently implemented code.
 

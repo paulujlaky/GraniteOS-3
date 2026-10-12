@@ -59,7 +59,7 @@ const depth = 32;
 
 var window: gui.Window = undefined;
 var files = api.Files{};
-var prompt = gui.Prompt{};
+var dialog = gui.Dialog{};
 
 /// The page, and a transparent layer over it showing the shape being dragged out.
 var picture: gui.Image = undefined;
@@ -144,7 +144,7 @@ var footer = gui.box(.{
     .background = theme.raised,
 
 }, &footer_parts);
-var parts = [_]*gui.Node{ &prompt.bar, &bar, &canvas, &footer };
+var parts = [_]*gui.Node{ &bar, &canvas, &footer };
 var root = gui.box(.{
 
     .background = 0x101010,
@@ -156,7 +156,7 @@ var title_bytes: [96]u8 = undefined;
 pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
 
     api.start(environment, .application);
-    prompt.init();
+    dialog.init();
 
     var argument_bytes: [256]u8 = undefined;
     const argument = api.argument(&argument_bytes);
@@ -187,7 +187,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         if (event.kind == .close) {
 
             if (!modified) window.quit();
-            prompt.check(&window, "Close without saving this drawing?", "Close", leave);
+            dialog.check(&window, "Close without saving?", "Changes to this drawing will be lost.", "Close", leave);
 
         }
 
@@ -285,7 +285,7 @@ fn build() void {
 
 fn key(event: api.Event) void {
 
-    if (prompt.open()) return;
+    if (dialog.open()) return;
 
     if (event.chord(control, 'z')) return undo(&undo_tool);
     if (event.chord(control, 'y') or event.chord(control_shift, 'z')) return redo(&redo_tool);
@@ -481,7 +481,7 @@ fn begin(point: [2]f32) void {
 
         sketch.disc(point[0], point[1], width() / 2, ink());
         touch(point, point);
-        show();
+        show(reach(point, point));
 
     }
 
@@ -497,18 +497,20 @@ fn extend(point: [2]f32) void {
 
             sketch.line(last[0], last[1], point[0], point[1], width(), ink());
             touch(last, point);
+            show(reach(last, point));
             last = point;
-            show();
 
         },
         else => {
 
             var layer = preview.sketch();
+            const before = previewed;
 
+            // Only where the shape was and now is goes to the display.
             clear_preview();
             previewed = shape(&layer, start, point);
             last = point;
-            preview.publish() catch {
+            preview.change(if (before) |old| old.join(previewed.?) else previewed) catch {
 
             };
 
@@ -525,14 +527,15 @@ fn end(point: [2]f32) void {
     if (tool != .brush and tool != .eraser) {
 
         var sketch = picture.sketch();
+        const before = previewed;
 
         clear_preview();
         previewed = null;
         dirty = shape(&sketch, start, point);
-        preview.publish() catch {
+        preview.change(before) catch {
 
         };
-        show();
+        show(dirty);
 
     }
 
@@ -634,7 +637,7 @@ fn flood(point: [2]f32) void {
     }
 
     dirty = area;
-    show();
+    show(area);
 
 }
 
@@ -709,10 +712,10 @@ fn touch(from: [2]f32, to: [2]f32) void {
 
 }
 
-/// Hands the changed page to the display.
-fn show() void {
+/// Hands the display what changed on the page: `area`, or all of it when null.
+fn show(area: ?gui.Rect) void {
 
-    picture.publish() catch {
+    picture.change(area) catch {
 
     };
 
@@ -797,7 +800,7 @@ fn redo(_: *gui.Node) void {
 
 fn after_step() void {
 
-    show();
+    show(null);
     modified = true;
     retitle();
     sync();
@@ -891,7 +894,7 @@ fn save(_: *gui.Node) void {
 
     var suggestion: [128]u8 = undefined;
 
-    prompt.ask(&window, "Save as", std.fmt.bufPrint(&suggestion, "{s}/Drawing.png", .{home}) catch "Drawing.png", "Save", write);
+    dialog.ask(&window, "Save as", std.fmt.bufPrint(&suggestion, "{s}/Drawing.png", .{home}) catch "Drawing.png", "Save", write);
 
 }
 
@@ -902,10 +905,10 @@ fn write(target: []const u8) void {
     defer arena.deinit();
 
     var name_bytes: [512]u8 = undefined;
-    const name = if (catalog.picture(target)) target else std.fmt.bufPrint(&name_bytes, "{s}.png", .{target}) catch return prompt.refuse();
-    const bytes = gui.png.encode(arena.allocator(), picture.pixels(), picture.width, picture.height) catch return prompt.refuse();
+    const name = if (catalog.picture(target)) target else std.fmt.bufPrint(&name_bytes, "{s}.png", .{target}) catch return dialog.refuse("That name won't do; try another.");
+    const bytes = gui.png.encode(arena.allocator(), picture.pixels(), picture.width, picture.height) catch return dialog.refuse("There isn't enough memory to save it.");
 
-    files.save(arena.allocator(), name, bytes) catch return prompt.ask(&window, "Could not save there. Save as", name, "Save", write);
+    files.save(arena.allocator(), name, bytes) catch return dialog.ask(&window, "Could not save there. Save as", name, "Save", write);
 
     path = std.fmt.bufPrint(&path_bytes, "{s}", .{name}) catch "";
     modified = false;
@@ -918,13 +921,13 @@ fn open(_: *gui.Node) void {
 
     var suggestion: [96]u8 = undefined;
 
-    prompt.ask(&window, "Open picture", std.fmt.bufPrint(&suggestion, "{s}/", .{home}) catch "/", "Open", read);
+    dialog.ask(&window, "Open picture", std.fmt.bufPrint(&suggestion, "{s}/", .{home}) catch "/", "Open", read);
 
 }
 
 fn read(target: []const u8) void {
 
-    if (!load(target)) return prompt.refuse();
+    if (!load(target)) return dialog.refuse("That isn't a picture this can open.");
 
     retitle();
     sync();
@@ -933,7 +936,7 @@ fn read(target: []const u8) void {
 
 fn renew(_: *gui.Node) void {
 
-    if (modified) return prompt.check(&window, "Start a new drawing? Unsaved changes are lost.", "New", restart);
+    if (modified) return dialog.check(&window, "Start a new drawing?", "Unsaved changes will be lost.", "New", restart);
 
     restart("");
 

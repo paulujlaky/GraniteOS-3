@@ -30,7 +30,10 @@ pub const Graph = @import("graph.zig").Graph;
 pub const sketch = @import("sketch.zig");
 pub const Sketch = sketch.Sketch;
 pub const Figure = sketch.Figure;
-pub const Prompt = @import("prompt.zig").Prompt;
+pub const Dialog = @import("dialog.zig").Dialog;
+pub const menu = @import("menu.zig");
+pub const Menu = menu.Menu;
+pub const Choice = menu.Choice;
 
 pub const Surface = @import("surface.zig").Surface;
 pub const screen = @import("surface.zig").screen;

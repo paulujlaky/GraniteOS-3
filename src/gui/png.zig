@@ -44,6 +44,46 @@ const Image = struct {
     /// Samples of the one colour tRNS makes transparent in a grey or truecolour image.
     key: ?[3]u16 = null,
 
+    /// Converts an unfiltered 8-bit scanline to premultiplied 0xAARRGGBB `out`, as `pixel` would one by one.
+    fn convert(self: *const Image, line: []const u8, out: []u32) Error!void {
+
+        switch (self.color) {
+
+            0 => for (out, line[0..out.len]) |*result, grey| {
+
+                result.* = 0xff000000 | @as(u32, grey) * 0x010101;
+
+            },
+            2 => for (out, 0..) |*result, x| {
+
+                const rgb = line[x * 3 ..][0..3];
+
+                result.* = 0xff000000 | @as(u32, rgb[0]) << 16 | @as(u32, rgb[1]) << 8 | rgb[2];
+
+            },
+            3 => for (out, line[0..out.len]) |*result, index| {
+
+                if (index >= self.entries) return error.Invalid;
+                result.* = self.palette[index];
+
+            },
+            4 => for (out, 0..) |*result, x| {
+
+                result.* = blend(line[x * 2 + 1], line[x * 2], line[x * 2], line[x * 2]);
+
+            },
+            else => for (out, 0..) |*result, x| {
+
+                const rgba = line[x * 4 ..][0..4];
+
+                result.* = blend(rgba[3], rgba[0], rgba[1], rgba[2]);
+
+            },
+
+        }
+
+    }
+
     /// Converts pixel `x` of an unfiltered scanline to premultiplied 0xAARRGGBB.
     fn pixel(self: *const Image, line: []const u8, x: usize) Error!u32 {
 
@@ -192,8 +232,17 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8, pixels: []u32) Er
         for (0..rows) |y| {
 
             const line = lines[y * stride + 1 ..][0 .. stride - 1];
+            const start = (row + y * down) * image.width + column;
 
-            for (0..columns) |x| pixels[(row + y * down) * image.width + column + x * across] = try image.pixel(line, x);
+            // Most images are 8-bit and not interlaced, so whole rows convert in one tight loop.
+            if (across == 1 and image.depth == 8 and image.key == null) {
+
+                try image.convert(line, pixels[start..][0..columns]);
+                continue;
+
+            }
+
+            for (0..columns) |x| pixels[start + x * across] = try image.pixel(line, x);
 
         }
 
@@ -354,17 +403,45 @@ fn unfilter(lines: []u8, stride: usize, unit: usize) Error!void {
     for (0..lines.len / stride) |y| {
 
         const filter = lines[y * stride];
+        const row = lines[y * stride + 1 ..][0 .. stride - 1];
 
-        if (filter > 4) return error.Invalid;
+        // The first row has nothing above it, which reads as zeros: Up leaves it alone, and Paeth predicts from the left alone.
+        const above: ?[]const u8 = if (y > 0) lines[(y - 1) * stride + 1 ..][0 .. stride - 1] else null;
 
-        for (1..stride) |x| {
+        // One tight loop per filter, since a whole row shares one; bytes before the first pixel's left neighbour read as zero.
+        switch (filter) {
 
-            const index = y * stride + x;
-            const left = if (x > unit) lines[index - unit] else 0;
-            const up = if (y > 0) lines[index - stride] else 0;
-            const corner = if (x > unit and y > 0) lines[index - stride - unit] else 0;
+            0 => {
 
-            lines[index] +%= predict(filter, left, up, corner);
+            },
+            1 => for (unit..row.len) |x| {
+
+                row[x] +%= row[x - unit];
+
+            },
+            2 => if (above) |up| for (row, up) |*value, over| {
+
+                value.* +%= over;
+
+            },
+            3 => for (row, 0..) |*value, x| {
+
+                const left: u9 = if (x >= unit) row[x - unit] else 0;
+                const up: u9 = if (above) |line| line[x] else 0;
+
+                value.* +%= @intCast((left + up) / 2);
+
+            },
+            4 => if (above) |up| {
+
+                for (row, 0..) |*value, x| value.* +%= if (x >= unit) predict(4, row[x - unit], up[x], up[x - unit]) else up[x];
+
+            } else for (unit..row.len) |x| {
+
+                row[x] +%= row[x - unit];
+
+            },
+            else => return error.Invalid,
 
         }
 
@@ -422,6 +499,16 @@ fn level(value: u16, depth: u5) u32 {
 fn premultiply(alpha: u32, red: u32, green: u32, blue: u32) u32 {
 
     return alpha << 24 | (red * alpha + 127) / 255 << 16 | (green * alpha + 127) / 255 << 8 | (blue * alpha + 127) / 255;
+
+}
+
+/// `premultiply` with the common opaque and clear cases skipping the arithmetic.
+fn blend(alpha: u8, red: u8, green: u8, blue: u8) u32 {
+
+    if (alpha == 255) return 0xff000000 | @as(u32, red) << 16 | @as(u32, green) << 8 | blue;
+    if (alpha == 0) return 0;
+
+    return premultiply(alpha, red, green, blue);
 
 }
 

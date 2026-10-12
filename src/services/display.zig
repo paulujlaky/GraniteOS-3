@@ -2,6 +2,7 @@ const std = @import("std");
 
 const svga = @import("svga.zig");
 const gpu = @import("gpu.zig");
+const intel = @import("intel.zig");
 const motion = @import("motion.zig");
 
 const api = @import("api");
@@ -135,7 +136,7 @@ const border = 1;
 const grip = 6;
 
 /// How far a window's shadow spreads past its frame.
-const spread = 16;
+const spread = 20;
 
 /// The radius of a window's content corners, inside its frame's border.
 const curve = theme.corner - border;
@@ -198,7 +199,7 @@ const Surface = struct {
     /// Everything it may draw on: the frame and its shadow.
     fn footprint(self: *const Surface) gui.Rect {
 
-        return if (self.decorated()) self.frame().inset(-spread) else self.area;
+        return if (self.decorated() or self.options.shadow) self.frame().inset(-spread) else self.area;
 
     }
 
@@ -361,6 +362,9 @@ var files = api.Files{};
 
 var renderer: ?gpu.Gpu = null;
 
+/// Intel graphics found behind the boot framebuffer, read but not yet driven.
+var graphics: ?intel.Intel = null;
+
 var surfaces = [_]Surface{.{}} ** 64;
 var clients = [_]Client{.{}} ** 32;
 var pictures = [_]Picture{.{}} ** gpu.textures;
@@ -395,6 +399,9 @@ var titled_at: u64 = 0;
 
 var pointer = gui.Point{};
 var buttons: u8 = 0;
+
+/// The buttons each input service last said its devices hold.
+var sources = [_]struct { id: u64 = 0, buttons: u8 = 0 }{.{}} ** 4;
 var modifiers = api.Event.Modifiers{};
 
 /// Rows at the top and bottom of the screen the session keeps for its bars.
@@ -405,9 +412,6 @@ var changed = false;
 
 /// The part of the screen to redraw before waiting for the next request.
 var stale: gui.Rect = .{};
-
-/// The rounded window corners a redraw lays over the GPU's frame.
-var patches: [2 * surfaces.len]gui.Rect = undefined;
 
 var clipboard: [64 * 1024]u8 = undefined;
 var copied: usize = 0;
@@ -451,7 +455,13 @@ pub export fn app_main(_: usize, base: usize, environment: *const api.abi.Enviro
             api.log(if (renderer != null) "display: ready (svga, 3D on)\n" else if (device.accelerated) "display: ready (svga, 3D failed)\n" else "display: ready (svga, 3D off)\n");
 
         },
-        .frame => api.log("display: ready (framebuffer)\n"),
+        .frame => {
+
+            graphics = intel.Intel.init(&settings.bars, settings.device);
+            if (graphics) |found| found.describe();
+            api.log(if (graphics != null) "display: ready (framebuffer, Intel)\n" else "display: ready (framebuffer)\n");
+
+        },
 
     }
 
@@ -552,7 +562,7 @@ fn open(size: gui.Rect) bool {
 
         for (&pictures, 0..) |*picture, slot| {
 
-            if (picture.client != 0) drawer.upload(slot, picture.canvas.pixels, @intCast(picture.canvas.width), @intCast(picture.canvas.height));
+            if (picture.client != 0) drawer.upload(slot, picture.canvas.pixels, @intCast(picture.canvas.width), @intCast(picture.canvas.height), picture.canvas.bounds());
 
         }
 
@@ -706,6 +716,21 @@ fn save(size: gui.Rect) void {
 
 }
 
+/// What draws the screen, as `info` reports it above the screen's size: an `api.display.Adapter.Kind`, then the PCI device id.
+fn describe() u64 {
+
+    const kind: api.display.Adapter.Kind = switch (screen) {
+
+        .svga => if (renderer != null) .accelerated else .svga,
+        .frame => if (graphics != null) .intel else .framebuffer,
+
+    };
+    const device: u64 = if (graphics) |found| found.device else settings.device >> 16;
+
+    return @as(u64, @intFromEnum(kind)) << 32 | device << 40;
+
+}
+
 /// Returns the reply, or null when the request waits for input.
 fn respond(request: api.Request) ?u64 {
 
@@ -714,7 +739,7 @@ fn respond(request: api.Request) ?u64 {
     return switch (protocol.operation(request.second)) {
 
         .hello => protocol.version,
-        .info => back.width | back.height << 16,
+        .info => back.width | back.height << 16 | describe(),
         .surface => attach(request, value),
         .place => place(request, value),
         .mode => mode(request, value),
@@ -761,6 +786,7 @@ fn attach(request: api.Request, region: u64) u64 {
 
     if (spec.options.fill) area = back.bounds();
     if (spec.layer == .window) area = arrival(area);
+    if (spec.layer == .popup) area = pop(request.first, spec.anchor, area);
 
     const surface = &surfaces[index];
 
@@ -777,7 +803,9 @@ fn attach(request: api.Request, region: u64) u64 {
     };
     name(surface, spec);
     insert(index);
-    if (spec.layer != .background) focus(index);
+
+    // A popup takes the keys while it shows without taking focus from the window it opened over.
+    if (spec.layer != .background and spec.layer != .popup) focus(index);
 
     // A window that had to shrink to fit learns its size before it first draws.
     if (area.width != spec.area.width or area.height != spec.area.height) tell(index);
@@ -816,6 +844,8 @@ fn place(request: api.Request, id: u64) u64 {
         if (surface.tile != .free) area = surface.area;
 
     }
+
+    if (spec.layer == .popup) area = pop(request.first, spec.anchor, area);
 
     const before = surface.footprint();
 
@@ -974,13 +1004,30 @@ fn reserve(request: api.Request, value: u64) u64 {
 /// Takes in, or refreshes, pixels a client shared for image commands.
 fn image(request: api.Request, handle: u64) u64 {
 
-    const size = fetch(request, [2]u32) orelse return protocol.invalid;
+    const size = fetch(request, [6]u32) orelse return protocol.invalid;
     const width = size[0];
     const height = size[1];
 
     if (width == 0 or height == 0 or width > 8192 or height > 8192) return protocol.invalid;
 
+    // Only what changed goes to the GPU, unless the image is new or changed size.
+    const whole = gui.Rect{
+
+        .width = @intCast(width),
+        .height = @intCast(height),
+
+    };
+    var touched = whole.intersect(.{
+
+        .x = @bitCast(size[2]),
+        .y = @bitCast(size[3]),
+        .width = @bitCast(size[4]),
+        .height = @bitCast(size[5]),
+
+    }) orelse return 0;
     var slot = find(request.first, handle);
+
+    if (slot == null or pictures[slot.?].canvas.width != width or pictures[slot.?].canvas.height != height) touched = whole;
 
     if (slot == null) {
 
@@ -1019,7 +1066,7 @@ fn image(request: api.Request, handle: u64) u64 {
 
     };
 
-    if (renderer) |*device| device.upload(slot.?, picture.canvas.pixels, width, height);
+    if (renderer) |*device| device.upload(slot.?, picture.canvas.pixels, width, height, touched);
 
     // Whatever shows the image draws it afresh.
     for (stack[0..depth]) |index| {
@@ -1101,39 +1148,11 @@ fn redraw() void {
 
             } else if (surface.footprint().intersect(visible)) |limit| {
 
-                layers(device, index, limit);
+                layers(device, index, limit, false);
 
             }
 
         }
-
-        // The GPU cannot cut to a curve, so the CPU redraws the few pixels at windows' rounded corners and lays them over; it cannot draw moving surfaces, so none goes near them.
-        var count: usize = 0;
-
-        for (stack[0..depth]) |index| {
-
-            const surface = &surfaces[index];
-            if (!surface.visible() or !surface.decorated() or surface.transition != null) continue;
-
-            const corners = gui.Corners{
-
-                .area = surface.area,
-                .radius = curve,
-
-            };
-
-            for (corners.squares()) |square| {
-
-                patches[count] = square.intersect(visible) orelse continue;
-                if (crowded(patches[count])) continue;
-                paint(patches[count]);
-                count += 1;
-
-            }
-
-        }
-
-        device.patch(&back, patches[0..count]);
 
         return device.finish(visible);
 
@@ -1159,16 +1178,58 @@ fn redraw() void {
 
 }
 
-/// Queues surface `index`'s decorations and content within `limit` on the GPU.
-fn layers(device: *gpu.Gpu, index: usize, limit: gui.Rect) void {
+/// Queues surface `index`'s decorations and content within `limit` on the GPU, a window's content cut to the curve of its frame's bottom corners;
+/// `whole` leaves the corners square for a caller that cuts the layer it draws into.
+fn layers(device: *gpu.Gpu, index: usize, limit: gui.Rect, whole: bool) void {
 
     const surface = &surfaces[index];
     const decorations = trim(index);
+    const origin = corner(surface.area);
 
     drawing = 0;
     device.render(decorations.commands(), corner(surface.footprint()), limit, texture);
     drawing = surface.client;
-    if (surface.area.intersect(limit)) |inside_limit| device.render(surface.commands(), corner(surface.area), inside_limit, texture);
+
+    const content = surface.area.intersect(limit) orelse return;
+    if (whole or !surface.decorated()) return device.render(surface.commands(), origin, content, texture);
+
+    const corners = gui.Corners{
+
+        .area = surface.area,
+        .radius = curve,
+
+    };
+    const squares = corners.squares();
+    const above = gui.Rect{
+
+        .x = surface.area.x,
+        .y = surface.area.y,
+        .width = surface.area.width,
+        .height = surface.area.height - squares[0].height,
+
+    };
+    const between = gui.Rect{
+
+        .x = squares[0].right(),
+        .y = squares[0].y,
+        .width = squares[1].x - squares[0].right(),
+        .height = squares[0].height,
+
+    };
+
+    for ([_]gui.Rect{ above, between }) |piece| if (piece.intersect(content)) |clip| device.render(surface.commands(), origin, clip, texture);
+
+    // The GPU cannot clip to a curve, so each bottom corner is drawn in the layer, cut there, and laid over the frame already drawn beneath it.
+    for (squares) |square| {
+
+        const clip = square.intersect(content) orelse continue;
+
+        device.lift(square);
+        device.render(surface.commands(), origin, clip, texture);
+        device.cut(surface.area, curve);
+        device.lower(square, .{ @floatFromInt(square.x), @floatFromInt(square.y), @floatFromInt(square.right()), @floatFromInt(square.bottom()) }, 1, clip);
+
+    }
 
 }
 
@@ -1182,7 +1243,7 @@ fn float(device: *gpu.Gpu, index: usize, visible: gui.Rect) void {
     const whole = footprint.intersect(back.bounds()) orelse return;
 
     device.lift(whole);
-    layers(device, index, whole);
+    layers(device, index, whole, true);
 
     // As `paint` does on the CPU, content is cut to the curve of the frame's bottom corners, and the frame fills in beneath.
     if (surface.decorated()) {
@@ -1210,19 +1271,6 @@ fn float(device: *gpu.Gpu, index: usize, visible: gui.Rect) void {
     }
 
     device.lower(whole, surface.pose.box(whole, footprint), surface.pose.opacity, visible);
-
-}
-
-/// Whether `area` meets a surface in transition.
-fn crowded(area: gui.Rect) bool {
-
-    for (stack[0..depth]) |index| {
-
-        if (surfaces[index].transition != null and surfaces[index].painted.intersect(area) != null) return true;
-
-    }
-
-    return false;
 
 }
 
@@ -1295,7 +1343,7 @@ fn input(request: api.Request) u64 {
     const count = @min(request.fourth / @sizeOf(api.Event), events.len);
 
     api.fetch(request, 0, std.mem.sliceAsBytes(events[0..count])) catch return protocol.invalid;
-    for (events[0..count]) |event| route(event);
+    for (events[0..count]) |event| route(event, request.first);
 
     for (&clients) |*owner| {
 
@@ -1307,7 +1355,7 @@ fn input(request: api.Request) u64 {
 
 }
 
-fn route(event: api.Event) void {
+fn route(event: api.Event, source: u64) void {
 
     switch (event.kind) {
 
@@ -1372,7 +1420,7 @@ fn route(event: api.Event) void {
             }
 
             track();
-            press(event.code);
+            press(holding(source, event.code));
 
         },
         .button => if (event.code >= 3) {
@@ -1395,6 +1443,34 @@ fn route(event: api.Event) void {
         },
 
     }
+
+}
+
+/// The buttons held on any pointing device, after input service `source` says its device holds `code`; a touchpad and a USB mouse each report only their own.
+fn holding(source: u64, code: u8) u8 {
+
+    const slot = for (&sources, 0..) |entry, index| {
+
+        if (entry.id == source) break index;
+
+    } else for (&sources, 0..) |entry, index| {
+
+        if (entry.id == 0) break index;
+
+    } else 0;
+
+    sources[slot] = .{
+
+        .id = source,
+        .buttons = code,
+
+    };
+
+    var all: u8 = 0;
+
+    for (sources) |entry| all |= entry.buttons;
+
+    return all;
 
 }
 
@@ -1477,7 +1553,12 @@ fn press(code: u8) void {
 
         }
 
-        const index = under(pointer) orelse continue;
+        const found = under(pointer);
+
+        // A press outside an app's own surfaces closes its popups; inside them, the app decides.
+        shut(if (found) |target| surfaces[target].client else 0);
+
+        const index = found orelse continue;
         const surface = &surfaces[index];
 
         if (button == 0) {
@@ -1753,13 +1834,25 @@ fn minimize(index: usize) void {
 
 }
 
-/// Where keys go: an overlay above everything, else the focused window.
+/// Where keys go: an overlay above everything, else the topmost popup, else the focused window.
 fn keyboard() ?usize {
 
     if (depth == 0) return null;
 
     const top = stack[depth - 1];
     if (surfaces[top].layer == .overlay and !surfaces[top].leaving) return top;
+
+    var position = depth;
+
+    while (position > 0) {
+
+        position -= 1;
+
+        const surface = &surfaces[stack[position]];
+        if (surface.layer == .popup and surface.visible()) return stack[position];
+        if (@intFromEnum(surface.layer) < @intFromEnum(Layer.popup)) break;
+
+    }
 
     const index = focused orelse return null;
 
@@ -1960,6 +2053,9 @@ fn focus(index: ?usize) void {
 
     focused = index;
     changed = true;
+
+    // Another app's window coming forward means the pointer or keys went elsewhere.
+    if (index) |target| shut(surfaces[target].client);
 
     for ([_]?usize{ previous, index }) |entry| {
 
@@ -2203,8 +2299,6 @@ fn trim(index: usize) gui.draw.List {
 
     };
 
-    if (!surface.decorated()) return list;
-
     const active = focused == index;
     const frame = gui.draw.move(surface.frame(), .{
 
@@ -2212,16 +2306,12 @@ fn trim(index: usize) gui.draw.List {
         .y = -footprint.y,
 
     });
+    var below = frame;
 
-    // A soft shadow from a few widening, faint layers, a little below the frame; they add up near its edge.
-    for ([_]i32{ 1, 4, 8, 13 }, [_]u8{ 14, 10, 7, 4 }) |grow, amount| {
-
-        var layer = frame.inset(-grow);
-
-        layer.y += 3;
-        list.round(layer, grow + theme.corner, gui.shade(0x000000, if (active) amount + amount / 2 else amount));
-
-    }
+    // A soft shadow a little below the frame, darker under the window in front.
+    below.y += 3;
+    if (surface.options.shadow or surface.decorated()) list.shadow(below, theme.corner, spread - 4, gui.shade(0x000000, if (active and surface.decorated()) 96 else 64));
+    if (!surface.decorated()) return list;
 
     const bar = gui.Rect{
 
@@ -2389,6 +2479,45 @@ fn inside(area: gui.Rect) gui.Rect {
 
 }
 
+/// Where client `owner`'s popup asking for `area` goes: moved from its `anchor` surface's content to the screen, then kept wholly on it.
+fn pop(owner: u64, anchor: u8, area: gui.Rect) gui.Rect {
+
+    var result = area;
+
+    if (anchor < surfaces.len and surfaces[anchor].client == owner and !surfaces[anchor].leaving) {
+
+        result.x += surfaces[anchor].area.x;
+        result.y += surfaces[anchor].area.y;
+
+    }
+
+    const width: i32 = @intCast(back.width);
+    const height: i32 = @intCast(back.height);
+
+    result.x = @max(@min(result.x, width - result.width - theme.gap), theme.gap);
+    result.y = @max(@min(result.y, height - result.height - theme.gap), theme.gap);
+
+    return result;
+
+}
+
+/// Closes every popup but those of client `keep`, as a press elsewhere or another window taking focus does.
+fn shut(keep: u64) void {
+
+    for (stack[0..depth]) |index| {
+
+        const surface = &surfaces[index];
+
+        if (surface.layer == .popup and surface.visible() and surface.client != keep) queue(index, .{
+
+            .kind = .close,
+
+        });
+
+    }
+
+}
+
 /// Where a new window of `area`'s size goes: centred in the work area, stepped down from others, and shrunk to fit.
 fn arrival(area: gui.Rect) gui.Rect {
 
@@ -2440,7 +2569,7 @@ fn session() u64 {
 
     for (surfaces) |surface| {
 
-        if (surface.client != 0 and !surface.decorated()) return surface.client;
+        if (surface.client != 0 and !surface.decorated() and surface.layer != .popup) return surface.client;
 
     }
 
@@ -2448,12 +2577,12 @@ fn session() u64 {
 
 }
 
-/// Background, panel, and overlay surfaces cover other windows, so only one client, the session, may hold them.
+/// Background, panel, and overlay surfaces cover other windows, so only one client, the session, may hold them; any app may show popups, which close as soon as the user presses elsewhere.
 fn allowed(owner: u64, layer: Layer) bool {
 
     switch (layer) {
 
-        .window => return true,
+        .window, .popup => return true,
         .background, .panel, .overlay => {
 
         },

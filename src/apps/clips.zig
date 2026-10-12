@@ -2,7 +2,6 @@
 
 const std = @import("std");
 
-const menu = @import("menu.zig");
 const notices = @import("notices.zig");
 
 const api = @import("api");
@@ -59,7 +58,7 @@ var list = gui.box(.{
 
 }, &row_list);
 var parts = [_]*gui.Node{ &top, &empty, &list };
-var root = gui.box(menu.popup.with(.{
+var root = gui.box(theme.popup.with(.{
 
     .padding = gui.Edges.all(8),
     .gap = 4,
@@ -100,6 +99,7 @@ pub fn init(size: gui.Rect) void {
         .height = 100,
         .hidden = true,
         .motion = .drop,
+        .shadow = true,
 
     }) catch api.exit(3);
 

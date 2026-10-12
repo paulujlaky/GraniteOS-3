@@ -12,7 +12,7 @@ fail() {
 
 }
 
-usage='Usage: sh tools/vmware.sh run|show|test [--media iso|disk] [--cpus N] [--memory MB]'
+usage='Usage: sh tools/vmware.sh run|show|test [--media iso|disk] [--cpus N] [--memory MB] [--usb on|off]'
 [ "$#" -ge 1 ] || fail "$usage"
 
 action=$1
@@ -20,6 +20,7 @@ media=iso
 vnc=$([ "$action" = test ] && echo 5902 || echo 5901)
 cpus=2
 memory=256
+usb=off
 shift
 
 while [ "$#" -gt 0 ]; do
@@ -30,6 +31,7 @@ while [ "$#" -gt 0 ]; do
         --media) media=$2 ;;
         --cpus) cpus=$2 ;;
         --memory) memory=$2 ;;
+        --usb) usb=$2 ;;
         *) fail "$usage" ;;
     esac
 
@@ -39,6 +41,19 @@ done
 
 case $action-$media in
     run-iso|run-disk|show-iso|show-disk|test-iso|test-disk) ;;
+    *) fail "$usage" ;;
+esac
+
+# `--usb on` moves the keyboard and mouse onto an xHCI controller's virtual USB devices, as on the physical desktop.
+case $usb in
+    on) controllers='pciBridge4.present = "TRUE"
+pciBridge4.virtualDev = "pcieRootPort"
+pciBridge4.functions = "8"
+usb.present = "TRUE"
+usb_xhci.present = "TRUE"
+keyboard.vusb.enable = "TRUE"
+mouse.vusb.enable = "TRUE"' ;;
+    off) controllers='usb.present = "FALSE"' ;;
     *) fail "$usage" ;;
 esac
 
@@ -179,7 +194,7 @@ RemoteDisplay.vnc.enabled = "TRUE"
 RemoteDisplay.vnc.port = "$vnc"
 floppy0.present = "FALSE"
 ethernet0.present = "FALSE"
-usb.present = "FALSE"
+$controllers
 sound.present = "FALSE"
 msg.autoAnswer = "TRUE"
 uuid.action = "create"

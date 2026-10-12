@@ -52,7 +52,7 @@ var name = gui.label("Untitled", .{
 var tools = [_]*gui.Node{ &create, &load, &keep, &divider, &name, &keep_as };
 var toolbar = gui.box(theme.bar, &tools);
 
-var prompt = gui.Prompt{};
+var dialog = gui.Dialog{};
 
 var position_bytes: [48]u8 = undefined;
 var position = gui.label("", theme.caption.with(.{
@@ -72,7 +72,7 @@ var status = gui.box(.{
     .background = theme.raised,
 
 }, &status_parts);
-var parts = [_]*gui.Node{ &toolbar, &prompt.bar, &page, &status };
+var parts = [_]*gui.Node{ &toolbar, &page, &status };
 var root = gui.box(.{}, &parts);
 
 var title_bytes: [96]u8 = undefined;
@@ -82,7 +82,7 @@ var caret: usize = std.math.maxInt(usize);
 pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
 
     api.start(environment, .application);
-    prompt.init();
+    dialog.init();
 
     const memory = api.share(capacity / 4096) catch api.exit(3);
 
@@ -147,9 +147,9 @@ fn react(event: api.Event) void {
     if (event.chord(control, 's')) return save(&keep);
     if (event.chord(control, 'o')) return askOpen(&load);
     if (event.chord(control, 'n')) return startNew(&create);
-    if (event.pressing(.escape) and prompt.open()) {
+    if (event.pressing(.escape) and dialog.open()) {
 
-        prompt.close();
+        dialog.close();
         window.focus(&page);
 
     }
@@ -215,7 +215,7 @@ fn askOpen(_: *gui.Node) void {
 
     var initial: [520]u8 = undefined;
 
-    prompt.ask(&window, "Open", std.fmt.bufPrint(&initial, "{s}/", .{folder}) catch folder, "Open", &openPath);
+    dialog.ask(&window, "Open", std.fmt.bufPrint(&initial, "{s}/", .{folder}) catch folder, "Open", &openPath);
 
 }
 
@@ -239,7 +239,7 @@ fn askSave(_: *gui.Node) void {
     var initial: [600]u8 = undefined;
     const suggestion = if (path.len != 0) path else std.fmt.bufPrint(&initial, "{s}/Untitled.txt", .{folder}) catch folder;
 
-    prompt.ask(&window, "Save as", suggestion, "Save", &saveAs);
+    dialog.ask(&window, "Save as", suggestion, "Save", &saveAs);
 
 }
 

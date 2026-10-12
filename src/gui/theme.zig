@@ -113,6 +113,58 @@ pub const primary = button.with(.{
 
 });
 
+/// The action a confirmation asks for when it cannot be undone, such as deleting.
+pub const destructive = button.with(.{
+
+    .background = danger,
+    .border = danger,
+    .color = 0xffffff,
+
+    .hover = .{
+
+        .background = 0xf06a62,
+        .border = 0xf06a62,
+
+    },
+    .focus = .{
+
+        .border = 0xffffff,
+
+    },
+    .pressed = .{
+
+        .background = 0xc9463f,
+        .border = 0xc9463f,
+
+    },
+
+});
+
+/// The raised, bordered card of a pop-up list or launcher.
+pub const popup = Style{
+
+    .padding = .all(6),
+    .gap = 2,
+
+    .background = raised,
+    .border = line,
+    .border_width = border,
+    .radius = corner,
+
+};
+
+/// A dialog's card, centred over the window it asks for.
+pub const card = popup.with(.{
+
+    .width = 400,
+    .padding = Edges.all(20),
+    .gap = spacing,
+
+});
+
+/// Laid over a window's content while a dialog asks something of it.
+pub const dim = 0x80000000;
+
 /// A borderless square button showing an icon, as in toolbars.
 pub const tool = Style{
 

@@ -67,7 +67,29 @@ var refresh = gui.tool(.refresh, &reload);
 var tools = [_]*gui.Node{ &back, &forward, &up, &location, &folder, &document, &divider, &rename, &remove, &refresh };
 var toolbar = gui.box(theme.bar, &tools);
 
-var prompt = gui.Prompt{};
+var dialog = gui.Dialog{};
+
+/// The right-click menus of an entry and of the folder around them.
+var entry_menu: gui.Menu(&.{
+
+    .{ .icon = .folder_open, .title = "Open", .hint = "Enter", .run = openChosen },
+    gui.menu.separator,
+    .{ .icon = .pencil, .title = "Rename", .hint = "F2", .run = renameChosen },
+    .{ .icon = .copy, .title = "Copy", .hint = "Ctrl+C", .run = copy, .enabled = copyable },
+    .{ .icon = .clipboard, .title = "Copy path", .run = copyPath },
+    gui.menu.separator,
+    .{ .icon = .trash, .title = "Delete", .hint = "Del", .run = removeChosen },
+
+}) = .{};
+var folder_menu: gui.Menu(&.{
+
+    .{ .icon = .folder_add, .title = "New folder", .run = folderChosen },
+    .{ .icon = .new, .title = "New file", .run = fileChosen },
+    .{ .icon = .paste, .title = "Paste", .hint = "Ctrl+V", .run = paste, .enabled = pasteable },
+    gui.menu.separator,
+    .{ .icon = .refresh, .title = "Refresh", .hint = "F5", .run = reloadChosen },
+
+}) = .{};
 
 const place = theme.item.with(.{
 
@@ -156,7 +178,7 @@ var body = gui.box(.{
     .direction = .row,
 
 }, &body_parts);
-var root_parts_all = [_]*gui.Node{ &toolbar, &prompt.bar, &body };
+var root_parts_all = [_]*gui.Node{ &toolbar, &body };
 var root = gui.box(.{}, &root_parts_all);
 
 var status_bytes: [96]u8 = undefined;
@@ -164,7 +186,7 @@ var status_bytes: [96]u8 = undefined;
 pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
 
     api.start(environment, .application);
-    prompt.init();
+    dialog.init();
 
     var argument_bytes: [256]u8 = undefined;
     const argument = api.argument(&argument_bytes);
@@ -181,6 +203,9 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         .height = 500,
 
     }) catch api.exit(3);
+    entry_menu.init(&window);
+    folder_menu.init(&window);
+    main.menu = &offerFolder;
 
     visit(if (argument.len != 0) argument else home, false);
 
@@ -197,7 +222,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
 fn react(event: api.Event) void {
 
-    if (event.kind != .key or !event.pressed or prompt.open()) return;
+    if (event.kind != .key or !event.pressed or dialog.open()) return;
 
     if (event.chord(control, 'c')) return copy();
     if (event.chord(control, 'v')) return paste();
@@ -210,6 +235,7 @@ fn react(event: api.Event) void {
         .backspace => goUp(&up),
         .delete => removeEntry(&remove),
         .f2 => renameEntry(&rename),
+        .f5 => reload(&refresh),
         else => {
 
         },
@@ -326,6 +352,7 @@ fn build(allocator: std.mem.Allocator) !void {
         rows[index] = gui.box(theme.item, &parts[index]);
         rows[index].action = &pick;
         rows[index].open = &launch;
+        rows[index].menu = &offerEntry;
         rows[index].data = index;
         children[index] = &rows[index];
 
@@ -370,7 +397,14 @@ fn summarize() void {
 
 fn report(err: api.ServiceError) void {
 
-    status.content.label = switch (err) {
+    status.content.label = reason(err);
+    window.refresh();
+
+}
+
+fn reason(err: api.ServiceError) []const u8 {
+
+    return switch (err) {
 
         error.Missing => "Not found.",
         error.Exists => "Something with that name already exists.",
@@ -381,7 +415,6 @@ fn report(err: api.ServiceError) void {
         else => "The file service is unavailable.",
 
     };
-    window.refresh();
 
 }
 
@@ -492,13 +525,13 @@ fn join(out: []u8, name: []const u8) ?[]const u8 {
 
 fn makeFolder(_: *gui.Node) void {
 
-    prompt.ask(&window, "New folder", "New folder", "Create", &createFolder);
+    dialog.ask(&window, "New folder", "New folder", "Create", &createFolder);
 
 }
 
 fn makeFile(_: *gui.Node) void {
 
-    prompt.ask(&window, "New file", "Untitled.txt", "Create", &createFile);
+    dialog.ask(&window, "New file", "Untitled.txt", "Create", &createFile);
 
 }
 
@@ -518,15 +551,14 @@ fn create(name: []const u8, directory: bool) void {
 
     var target: [512]u8 = undefined;
 
-    if (!valid(name)) return prompt.refuse();
+    if (!valid(name)) return dialog.refuse(unnamed);
 
-    const full = join(&target, name) orelse return prompt.refuse();
+    const full = join(&target, name) orelse return dialog.refuse(unnamed);
     const result = if (directory) files.directory(full) else files.create(full);
 
     result catch |err| {
 
-        report(err);
-        return prompt.refuse();
+        return dialog.refuse(reason(err));
 
     };
 
@@ -539,7 +571,7 @@ fn renameEntry(_: *gui.Node) void {
 
     const index = selected orelse return;
 
-    prompt.ask(&window, "Rename to", entries[index].name, "Rename", &applyRename);
+    dialog.ask(&window, "Rename to", entries[index].name, "Rename", &applyRename);
 
 }
 
@@ -549,12 +581,11 @@ fn applyRename(name: []const u8) void {
     var from: [512]u8 = undefined;
     var to: [512]u8 = undefined;
 
-    if (!valid(name)) return prompt.refuse();
+    if (!valid(name)) return dialog.refuse(unnamed);
 
     files.rename(join(&from, entries[index].name) orelse return, join(&to, name) orelse return) catch |err| {
 
-        report(err);
-        return prompt.refuse();
+        return dialog.refuse(reason(err));
 
     };
 
@@ -572,7 +603,7 @@ fn removeEntry(_: *gui.Node) void {
     const index = selected orelse return;
     var message: [300]u8 = undefined;
 
-    prompt.check(&window, std.fmt.bufPrint(&message, "Delete \"{s}\"?", .{entries[index].name}) catch "Delete it?", "Delete", &applyRemove);
+    dialog.check(&window, std.fmt.bufPrint(&message, "Delete \"{s}\"?", .{entries[index].name}) catch "Delete it?", "This can't be undone.", "Delete", &applyRemove);
 
 }
 
@@ -635,6 +666,84 @@ fn select(name: []const u8) void {
         if (std.mem.eql(u8, entry.name, name)) return choose(index);
 
     }
+
+}
+
+const unnamed = "Names need a character or two, and no slashes.";
+
+fn offerEntry(row: *gui.Node, at: gui.Point) void {
+
+    choose(row.data);
+    entry_menu.show(at);
+
+}
+
+fn offerFolder(_: *gui.Node, at: gui.Point) void {
+
+    folder_menu.show(at);
+
+}
+
+fn openChosen() void {
+
+    if (selected) |index| open(index);
+
+}
+
+fn renameChosen() void {
+
+    renameEntry(&rename);
+
+}
+
+fn removeChosen() void {
+
+    removeEntry(&remove);
+
+}
+
+fn folderChosen() void {
+
+    makeFolder(&folder);
+
+}
+
+fn fileChosen() void {
+
+    makeFile(&document);
+
+}
+
+fn reloadChosen() void {
+
+    reload(&refresh);
+
+}
+
+/// Puts the selected entry's full path on the clipboard.
+fn copyPath() void {
+
+    const index = selected orelse return;
+    var target: [512]u8 = undefined;
+
+    gui.display.copy(join(&target, entries[index].name) orelse return) catch |err| return report(err);
+    status.content.label = "Path copied.";
+    window.refresh();
+
+}
+
+/// Only files can be copied, so a folder greys Copy out.
+fn copyable() bool {
+
+    const index = selected orelse return false;
+
+    return !entries[index].directory;
+
+}
+
+fn pasteable() bool {
+
+    return copied.len != 0;
 
 }
 

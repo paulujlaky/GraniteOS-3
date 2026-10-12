@@ -1,15 +1,14 @@
-//! Line graphs drawn on the CPU into an image, so their curves get the anti-aliased edges the display's quads cannot draw.
+//! Line graphs drawn as a sketch: a smooth anti-aliased curve over a fading fill, which the display draws on its GPU.
 
 const std = @import("std");
 
+const canvas = @import("canvas.zig");
 const sketch = @import("sketch.zig");
 const theme = @import("theme.zig");
 
-/// The widest graph drawn; wider areas draw nothing.
-const widest = 4096;
-
-/// The curve's height at each column edge, in pixels from the top; shared, since graphs draw one at a time.
-var curve: [widest + 1]f32 = undefined;
+/// The curve's points: one every `pitch` pixels across the widest graph drawn; wider graphs space them further apart.
+const pitch = 2;
+var curve: [sketch.most][2]f32 = undefined;
 
 /// Colours and line width of a graph, as 0xRRGGBB.
 pub const Look = struct {
@@ -52,64 +51,58 @@ pub const Graph = struct {
 
         const self: *Graph = @fieldParentPtr("figure", figure);
 
-        plot(target.pixels, target.width, target.height, self.values, self.look);
+        plot(target, self.values, self.look);
 
     }
 
 };
 
-/// Draws `values` as premultiplied 0xAARRGGBB `pixels`, `width` by `height`: a rounded background, grid rows, and a smooth curve over a fading fill.
-pub fn plot(pixels: []u32, width: usize, height: usize, values: []const f32, look: Look) void {
+/// Draws `values` over `target`: a rounded background, grid rows, and a smooth curve over a fading fill.
+pub fn plot(target: *sketch.Sketch, values: []const f32, look: Look) void {
 
-    if (width == 0 or height == 0 or width > widest) return;
+    if (target.width == 0 or target.height == 0) return;
 
+    const width: f32 = @floatFromInt(target.width);
+    const height: f32 = @floatFromInt(target.height);
+    const radius: f32 = @floatFromInt(look.radius);
     const pad = look.width + 1;
-    const span = @as(f32, @floatFromInt(height)) - 2 * pad;
+    const span = height - 2 * pad;
     const last: f32 = @floatFromInt(@max(values.len, 2) - 1);
+    const count = std.math.clamp(target.width / pitch + 1, 2, curve.len);
+
+    target.rectangle(.{ 0, 0, width, height }, radius, 0, look.background);
+
+    for (1..look.rows) |row| {
+
+        const y = @floor(height * @as(f32, @floatFromInt(row)) / @as(f32, @floatFromInt(look.rows)));
+
+        target.rectangle(.{ 0, y, width, y + 1 }, 0, 0, look.grid);
+
+    }
 
     // A monotone cubic through the samples, so the curve never swings past its neighbours, nor out of range.
-    for (0..width + 1) |x| {
+    for (curve[0..count], 0..) |*point, index| {
 
-        const at = @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(width)) * last;
+        const x = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(count - 1));
 
-        curve[x] = pad + (1 - lift(sample(values, at), look.emphasis)) * span;
-
-    }
-
-    const tall: f32 = @floatFromInt(height);
-    const half = look.width / 2;
-
-    for (0..height) |y| {
-
-        const fy: f32 = @floatFromInt(y);
-        const depth = std.math.clamp(fy / tall, 0, 1);
-        const shade = look.fill[0] + (look.fill[1] - look.fill[0]) * depth;
-        const ruled = look.rows > 1 and y != 0 and (y * look.rows) % height < look.rows;
-
-        for (0..width) |x| {
-
-            var pixel = Pixel.solid(look.background);
-
-            if (ruled) pixel.over(look.grid, 1);
-
-            // Four samples across the column cover the curve's slope.
-            var covered: f32 = 0;
-
-            for (0..4) |step| {
-
-                const t = (@as(f32, @floatFromInt(step)) + 0.5) / 4;
-
-                covered += std.math.clamp(fy + 1 - (curve[x] + (curve[x + 1] - curve[x]) * t), 0, 1) / 4;
-
-            }
-
-            pixel.over(look.line, covered * shade);
-            pixel.over(look.line, std.math.clamp(half + 0.5 - distance(x, fy + 0.5, width), 0, 1));
-            pixels[y * width + x] = pixel.pack(sketch.inside(x, y, width, height, look.radius));
-
-        }
+        point.* = .{ x * width, pad + (1 - lift(sample(values, x * last), look.emphasis)) * span };
 
     }
+
+    target.curve(curve[0..count], look.width, look.line, .{
+
+        .floor = height,
+        .ceiling = 0,
+        .colors = .{ canvas.shade(look.line, level(look.fill[0])), canvas.shade(look.line, level(look.fill[1])) },
+        .radius = radius,
+
+    });
+
+}
+
+fn level(amount: f32) u8 {
+
+    return @intFromFloat(std.math.clamp(amount, 0, 1) * 255 + 0.5);
 
 }
 
@@ -152,71 +145,5 @@ fn tangent(values: []const f32, index: usize) f32 {
     if (before * after <= 0) return 0;
 
     return 2 * before * after / (before + after);
-
-}
-
-/// How far the pixel centre in column `x` at height `y` lies from the curve, looking a few columns either side.
-fn distance(x: usize, y: f32, width: usize) f32 {
-
-    const px = @as(f32, @floatFromInt(x)) + 0.5;
-    var nearest: f32 = std.math.inf(f32);
-    var column = x -| 2;
-
-    while (column < @min(x + 3, width)) : (column += 1) {
-
-        const ax: f32 = @floatFromInt(column);
-        const ay = curve[column];
-        const dy = curve[column + 1] - ay;
-        const t = std.math.clamp(((px - ax) + (y - ay) * dy) / (1 + dy * dy), 0, 1);
-        const ex = px - (ax + t);
-        const ey = y - (ay + dy * t);
-
-        nearest = @min(nearest, @sqrt(ex * ex + ey * ey));
-
-    }
-
-    return nearest;
-
-}
-
-/// An opaque colour being built up in floats, layer over layer.
-const Pixel = struct {
-
-    channels: [3]f32,
-
-    fn solid(color: u32) Pixel {
-
-        return .{
-
-            .channels = .{ channel(color, 16), channel(color, 8), channel(color, 0) },
-
-        };
-
-    }
-
-    fn over(self: *Pixel, color: u32, alpha: f32) void {
-
-        if (alpha <= 0) return;
-
-        for (&self.channels, [_]u5{ 16, 8, 0 }) |*value, shift| value.* += (channel(color, shift) - value.*) * @min(alpha, 1);
-
-    }
-
-    /// Premultiplied by `coverage`, as images want.
-    fn pack(self: Pixel, coverage: f32) u32 {
-
-        var result: u32 = @as(u32, @intFromFloat(coverage * 255 + 0.5)) << 24;
-
-        for (self.channels, [_]u5{ 16, 8, 0 }) |value, shift| result |= @as(u32, @intFromFloat(value * coverage + 0.5)) << shift;
-
-        return result;
-
-    }
-
-};
-
-fn channel(color: u32, shift: u5) f32 {
-
-    return @floatFromInt(color >> shift & 0xff);
 
 }

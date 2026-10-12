@@ -95,7 +95,21 @@ pub const Image = struct {
     /// Hands the pixels to the display, and again after changing them.
     pub fn publish(self: *Image) !void {
 
-        try display.image(self.handle, self.width, self.height);
+        try self.change(null);
+
+    }
+
+    /// Hands the display what changed in `area` after it was published, such as a brush stroke, or every pixel when null.
+    pub fn change(self: *Image, area: ?Rect) !void {
+
+        try display.image(self.handle, self.width, self.height, if (area) |changed| .{
+
+            .x = changed.x,
+            .y = changed.y,
+            .width = changed.width,
+            .height = changed.height,
+
+        } else null);
 
         for (published) |entry| if (entry == self) return;
         for (&published) |*entry| if (entry.* == null) {
@@ -134,7 +148,7 @@ pub fn republish() void {
 
     for (published) |entry| {
 
-        if (entry) |picture| display.image(picture.handle, picture.width, picture.height) catch {
+        if (entry) |picture| display.image(picture.handle, picture.width, picture.height, null) catch {
 
         };
 

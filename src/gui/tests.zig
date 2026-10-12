@@ -600,3 +600,66 @@ test "sketches cover anti-aliased discs, lines, arcs, and outlines, and skip gly
     for (screen) |pixel| try std.testing.expectEqual(0, pixel);
 
 }
+
+test "recorded shapes, curves, and shadows replay where a sketch would paint them" {
+
+    var bytes: [4096]u8 align(4) = undefined;
+    var list = draw.List{
+
+        .bytes = &bytes,
+        .width = 48,
+        .height = 48,
+
+    };
+    var recorder = sketch.Sketch{
+
+        .width = 40,
+        .height = 40,
+        .list = &list,
+        .origin = .{
+
+            .x = 4,
+            .y = 4,
+
+        },
+
+    };
+    const points = [_][2]f32{ .{ 2, 30 }, .{ 20, 10 }, .{ 38, 20 } };
+
+    recorder.disc(20, 20, 9.5, 0xffffff);
+    recorder.line(2, 2, 38, 38, 3, 0xff0000);
+    recorder.curve(&points, 2, 0x00ff00, null);
+
+    var screen = [_]u32{0} ** (48 * 48);
+    var target = canvas.Canvas{
+
+        .pixels = &screen,
+        .width = 48,
+        .height = 48,
+
+    };
+
+    draw.replay(&target, list.commands(), .{}, target.bounds(), null);
+
+    // Moved by the sketch's origin: the disc's middle, the line along the diagonal, and the curve's middle point.
+    try std.testing.expectEqual(0xff0000, screen[24 * 48 + 24]);
+    try std.testing.expectEqual(0xff0000, screen[40 * 48 + 40]);
+    try std.testing.expectEqual(0x00ff00, screen[14 * 48 + 24]);
+    try std.testing.expectEqual(0, screen[2 * 48 + 46]);
+
+    // A shadow darkens towards its edge and leaves its middle to whatever casts it.
+    @memset(&screen, 0xffffff);
+    target.shadow(.{
+
+        .x = 8,
+        .y = 8,
+        .width = 32,
+        .height = 32,
+
+    }, 4, 6, 0x000000);
+
+    try std.testing.expectEqual(0xffffff, screen[24 * 48 + 24]);
+    try std.testing.expect(screen[24 * 48 + 7] & 0xff < screen[24 * 48 + 4] & 0xff);
+    try std.testing.expectEqual(0xffffff, screen[24 * 48 + 0]);
+
+}

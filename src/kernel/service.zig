@@ -13,7 +13,19 @@ var restarting = false;
 var attempts: u8 = 0;
 var due: u64 = 0;
 var controller: ?pci.Bar = null;
-var adapter: ?[3]pci.Bar = null;
+var host: ?pci.Bar = null;
+
+/// The display's graphics device: its PCI vendor and device ids, and the BARs it needs.
+const Graphics = struct {
+
+    device: u32,
+    bars: [3]pci.Bar,
+
+};
+
+const vmware = 0x0405_15ad;
+
+var adapter: ?Graphics = null;
 var probed = false;
 
 pub fn start() !void {
@@ -100,11 +112,15 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
     if (image == .display and !probed) {
 
         probed = true;
-        adapter = svga();
+        adapter = svga() orelse intel();
 
     }
 
     if (image == .display and root.framebuffer == null and adapter == null) return error.NoDevice;
+
+    // xHCI: serial bus, USB, xHCI; its registers are BAR 0.
+    if (image == .usb and host == null) host = if (pci.find(.{ .class = 0x0c0330 })) |at| pci.bar(at, 0) else null;
+    if (image == .usb and host == null) return error.NoDevice;
 
     const task = try root.spawn(bytes, argument, owner.home);
     errdefer task.state = .dead;
@@ -199,11 +215,23 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
 
             }
 
-            // Screen objects keep VRAM on the device side, so only the ports and command FIFO are granted.
-            if (adapter) |bars| {
+            if (adapter) |graphics| {
 
-                try task.grant(.port, bars[0].base, bars[0].size);
-                try task.grant(.mmio, bars[2].base, bars[2].size);
+                const bars = graphics.bars;
+
+                // Screen objects keep VRAM on the device side, so only the ports and command FIFO are granted; Intel's registers and GTT share BAR 0.
+                if (graphics.device == vmware) {
+
+                    try task.grant(.port, bars[0].base, bars[0].size);
+                    try task.grant(.mmio, bars[2].base, bars[2].size);
+
+                } else {
+
+                    try task.grant(.mmio, bars[0].base, bars[0].size);
+
+                }
+
+                task.environment.device = graphics.device;
 
                 for (bars, 0..) |entry, index| task.environment.bars[index] = .{
 
@@ -230,6 +258,21 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
             // The PS/2 keyboard and mouse.
             try listen(task, 1);
             try listen(task, 12);
+
+        },
+        .usb => {
+
+            try task.configure(.service, &.{
+
+                .ipc, .time, .mmio, .dma, .diagnostics
+
+            });
+            const page = host.?.base & ~@as(u64, 4095);
+
+            try task.grant(.mmio, page, std.mem.alignForward(u64, host.?.base + host.?.size, 4096) - page);
+            try task.grant(.log, 0, 1);
+            task.context.frame.rsi = host.?.base;
+            task.context.frame.rcx = host.?.size;
 
         },
         // Applications keep the default application policy.
@@ -264,15 +307,37 @@ pub fn interrupt(irq: u4) void {
 }
 
 /// VMware SVGA II: I/O ports, VRAM, and command FIFO.
-fn svga() ?[3]pci.Bar {
+fn svga() ?Graphics {
 
-    const at = pci.find(.{ .id = 0x0405_15ad }) orelse return null;
+    const at = pci.find(.{ .id = vmware }) orelse return null;
 
     return .{
 
-        pci.bar(at, 0) orelse return null,
-        pci.bar(at, 1) orelse return null,
-        pci.bar(at, 2) orelse return null,
+        .device = vmware,
+        .bars = .{
+
+            pci.bar(at, 0) orelse return null,
+            pci.bar(at, 1) orelse return null,
+            pci.bar(at, 2) orelse return null,
+
+        },
+
+    };
+
+}
+
+/// Intel integrated graphics, such as the UHD Graphics 630: a display controller from Intel, whose registers and GTT are BAR 0.
+fn intel() ?Graphics {
+
+    const at = pci.find(.{ .class = 0x030000 }) orelse return null;
+    const device = pci.id(at);
+
+    if (device & 0xffff != 0x8086) return null;
+
+    return .{
+
+        .device = device,
+        .bars = .{ pci.bar(at, 0) orelse return null, .{ .base = 0, .size = 0 }, .{ .base = 0, .size = 0 } },
 
     };
 

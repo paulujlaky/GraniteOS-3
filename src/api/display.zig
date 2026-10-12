@@ -20,8 +20,13 @@ pub const Layer = enum(u8) {
     background,
     window,
 
-    /// Undecorated chrome above windows, such as bars, docks, and menus.
+    /// Undecorated chrome above windows, such as bars, docks, and launchers.
     panel,
+
+    /// Short-lived lists above everything but overlays, such as menus; any app may show one, which takes the keys while it shows.
+    /// A press anywhere outside the app's own surfaces closes it with a `close` event.
+    popup,
+
     overlay,
     _,
 
@@ -35,7 +40,10 @@ pub const Options = packed struct(u8) {
     /// Keeps its size: no resizing or maximising.
     fixed: bool = false,
 
-    reserved: u6 = 0,
+    /// Casts a soft shadow, as windows do; for undecorated surfaces such as menus.
+    shadow: bool = false,
+
+    reserved: u5 = 0,
 
 };
 
@@ -70,6 +78,10 @@ pub const Spec = extern struct {
     /// The app it belongs to as an `abi.Image` index, so the session can group windows; `none` otherwise.
     application: u8 = none,
     motion: Motion = .auto,
+
+    /// A popup's `area` is relative to the content of this surface of the same app, such as the window a menu opens in; `none` for the screen.
+    anchor: u8 = none,
+
     length: u8 = 0,
     title: [64]u8 = undefined,
 
@@ -144,6 +156,59 @@ pub const Action = enum(u8) {
 
 };
 
+/// What draws the screen: the graphics device and how the display uses it.
+pub const Adapter = struct {
+
+    kind: Kind = .framebuffer,
+
+    /// The PCI device id, for telling models apart.
+    device: u16 = 0,
+
+    pub const Kind = enum(u8) {
+
+        /// The firmware's framebuffer, drawn by the CPU.
+        framebuffer,
+
+        /// VMware's SVGA II, drawn by the CPU.
+        svga,
+
+        /// VMware's SVGA II with its 3D GPU drawing.
+        accelerated,
+
+        /// Intel integrated graphics, showing the firmware's framebuffer drawn by the CPU until the GPU is driven.
+        intel,
+
+        _,
+
+    };
+
+    /// What people call it, such as `Intel UHD Graphics 630`.
+    pub fn name(self: Adapter) []const u8 {
+
+        return switch (self.kind) {
+
+            .svga, .accelerated => "VMware SVGA II",
+            .intel => switch (self.device) {
+
+                0x3e91, 0x3e92, 0x3e98, 0x9bc5, 0x9bc8 => "Intel UHD Graphics 630",
+                else => "Intel graphics",
+
+            },
+            else => "Firmware framebuffer",
+
+        };
+
+    }
+
+    /// How it draws, such as `GPU-accelerated`.
+    pub fn rendering(self: Adapter) []const u8 {
+
+        return if (self.kind == .accelerated) "GPU-accelerated" else "drawn by the CPU";
+
+    }
+
+};
+
 /// An input event and the surface it is for.
 pub const Input = struct {
 
@@ -178,6 +243,20 @@ pub const Display = struct {
         var placement = spec;
 
         return self.request(.surface, @intCast(handle), std.mem.asBytes(&placement));
+
+    }
+
+    /// What draws the screen.
+    pub fn adapter(self: *Display) api.ServiceError!Adapter {
+
+        const value = try self.request(.info, 0, &.{});
+
+        return .{
+
+            .kind = @enumFromInt(value >> 32 & 0xff),
+            .device = @intCast(value >> 40 & 0xffff),
+
+        };
 
     }
 
@@ -265,12 +344,19 @@ pub const Display = struct {
 
     }
 
-    /// Makes the shared pixels `handle`, `width` by `height` premultiplied 0xAARRGGBB, drawable by image commands; again after changing them.
-    pub fn image(self: *Display, handle: u64, width: u32, height: u32) api.ServiceError!void {
+    /// Makes the shared pixels `handle`, `width` by `height` premultiplied 0xAARRGGBB, drawable by image commands; again after changing them,
+    /// naming the `changed` area when only that did, so less goes to the GPU.
+    pub fn image(self: *Display, handle: u64, width: u32, height: u32, changed: ?Area) api.ServiceError!void {
 
         try self.share(handle);
 
-        var dimensions = [2]u32{ width, height };
+        const area = changed orelse Area{
+
+            .width = @intCast(width),
+            .height = @intCast(height),
+
+        };
+        var dimensions = [6]u32{ width, height, @bitCast(area.x), @bitCast(area.y), @bitCast(area.width), @bitCast(area.height) };
 
         _ = try self.request(.image, @intCast(handle), std.mem.asBytes(&dimensions));
 

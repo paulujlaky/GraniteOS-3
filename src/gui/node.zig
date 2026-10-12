@@ -82,6 +82,9 @@ pub const Node = struct {
     /// Follows the pointer from a press on the node until release, such as drawing on a canvas.
     track: ?*const fn (*Node, Track) void = null,
 
+    /// Runs on a right-click, or Shift+F10 while focused, with where its menu should open in surface coordinates; see `gui.Menu`.
+    menu: ?*const fn (*Node, Point) void = null,
+
     /// Free for the app, such as an index into its own data.
     data: usize = 0,
 
@@ -398,6 +401,29 @@ pub const Node = struct {
         }
 
         return if (self.focusable() or self.track != null) self else null;
+
+    }
+
+    /// The deepest node under `point` that has a menu.
+    pub fn offer(self: *Node, point: Point) ?*Node {
+
+        if (!self.shown() or !self.rect.contains(point)) return null;
+
+        if (self.content == .box) {
+
+            const children = self.content.box;
+
+            for (0..children.len) |index| {
+
+                const child = children[if (self.style.direction == .stack) children.len - 1 - index else index];
+
+                if (child.offer(point)) |found| return found;
+
+            }
+
+        }
+
+        return if (self.menu != null) self else null;
 
     }
 

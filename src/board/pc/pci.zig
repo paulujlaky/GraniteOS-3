@@ -39,7 +39,7 @@ pub fn find(match: Match) ?u32 {
                 const found = switch (match) {
 
                     .class => |code| read(at, 8) >> 8 == code,
-                    .id => |id| read(at, 0) == id,
+                    .id => |wanted| read(at, 0) == wanted,
 
                 };
 
@@ -64,29 +64,44 @@ pub fn bar(at: u32, index: u3) ?Bar {
     const ports = original & 1 != 0;
     const mask: u32 = if (ports) ~@as(u32, 3) else ~@as(u32, 0xf);
 
-    // ponytail: 64-bit memory BARs are skipped; support them when a device places one above 4 GiB.
-    if (!ports and original & 6 != 0 or original & mask == 0) return null;
+    // A 64-bit memory BAR takes the next register for its upper half, as xHCI controllers' do.
+    const wide = !ports and original & 6 == 4;
+    const upper: u32 = if (wide and index < 5) read(at, offset + 4) else 0;
+
+    if (!ports and original & 6 != 0 and !wide or wide and index == 5) return null;
+    if (original & mask == 0 and upper == 0) return null;
 
     // Sizing a BAR while it decodes would briefly move the device.
     write(at, 4, command & ~@as(u32, 3));
     write(at, offset, 0xffffffff);
+    if (wide) write(at, offset + 4, 0xffffffff);
 
-    var size = ~(read(at, offset) & mask) +% 1;
+    const low: u64 = read(at, offset) & mask;
+    const high: u64 = if (wide) read(at, offset + 4) else 0xffffffff;
+    var size = ~(high << 32 | low) +% 1;
 
     // I/O BARs may leave their upper half unimplemented.
     if (ports) size &= 0xffff;
 
     write(at, offset, original);
+    if (wide) write(at, offset + 4, upper);
     write(at, 4, command | 0x407);
     if (size == 0) return null;
 
     return .{
 
-        .base = original & mask,
+        .base = @as(u64, upper) << 32 | (original & mask),
         .size = size,
         .ports = ports,
 
     };
+
+}
+
+/// The vendor id of function `at`, with its device id in the upper half.
+pub fn id(at: u32) u32 {
+
+    return read(at, 0);
 
 }
 

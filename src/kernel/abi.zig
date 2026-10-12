@@ -75,6 +75,7 @@ pub const Image = enum(u64) {
     install,
     display,
     input,
+    usb,
     login,
     explorer,
     editor,
@@ -92,7 +93,7 @@ pub const Image = enum(u64) {
 
         return switch (self) {
 
-            .serial, .helper, .storage, .files, .accounts, .install, .display, .input => false,
+            .serial, .helper, .storage, .files, .accounts, .install, .display, .input, .usb => false,
             else => true,
 
         };
@@ -172,6 +173,9 @@ pub const Environment = extern struct {
 
     /// The PCI function a driver service was granted, by BAR index; unused entries are empty.
     bars: [6]Bar = [_]Bar{.{}} ** 6,
+
+    /// That function's vendor id, and its device id in the upper half; zero without one.
+    device: u32 = 0,
 
 };
 

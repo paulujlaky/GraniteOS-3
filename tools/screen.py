@@ -18,6 +18,7 @@ KEYS = {
     "delete": 0xFFFF, "home": 0xFF50, "end": 0xFF57, "left": 0xFF51, "up": 0xFF52,
     "right": 0xFF53, "down": 0xFF54, "pageup": 0xFF55, "pagedown": 0xFF56, "space": 0x20,
     "shift": 0xFFE1, "control": 0xFFE3, "ctrl": 0xFFE3, "alt": 0xFFE9, "super": 0xFFEB,
+    **{f"f{number}": 0xFFBD + number for number in range(1, 13)},
 }
 
 
@@ -134,6 +135,8 @@ def run(screen, steps):
             if step != "move":
                 button = 1 if step == "click" else 4
                 screen.point(x, y, button)
+                # Held as long as a person would, so a USB mouse polled every few milliseconds sees it.
+                time.sleep(0.05)
                 screen.point(x, y, 0)
             index += 3
         elif step == "drag":
@@ -148,6 +151,7 @@ def run(screen, steps):
             x, y, count = int(steps[index + 1]), int(steps[index + 2]), int(steps[index + 3])
             for _ in range(abs(count)):
                 screen.point(x, y, 8 if count < 0 else 16)
+                time.sleep(0.03)
                 screen.point(x, y, 0)
             index += 4
         elif step == "type":
