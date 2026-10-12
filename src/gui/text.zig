@@ -470,6 +470,13 @@ pub const Lines = struct {
 
 };
 
+/// How far below the top of a line of text at `size` its baseline sits.
+pub fn ascent(face: *const font.Font, size: f32) i32 {
+
+    return @intFromFloat(@as(f32, @floatFromInt(face.ascent)) * size / face.units);
+
+}
+
 /// Pixel height of one line of text at `size`.
 pub fn leading(face: *const font.Font, size: f32) i32 {
 

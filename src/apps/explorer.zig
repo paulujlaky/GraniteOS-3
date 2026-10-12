@@ -449,7 +449,7 @@ fn open(index: usize) void {
 
     if (entries[index].directory) return visit(full, false);
 
-    _ = api.launch(@tagName(catalog.opener(full)), full) catch |err| report(err);
+    catalog.start(catalog.opener(full), full) catch |err| report(err);
 
 }
 

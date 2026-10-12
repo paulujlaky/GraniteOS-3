@@ -5,6 +5,8 @@ const check = @import("../../kernel/check.zig");
 const schedule = @import("../../kernel/schedule.zig");
 const ipc = @import("../../kernel/ipc.zig");
 const service = @import("../../kernel/service.zig");
+const process = @import("../../kernel/process.zig");
+const abi = @import("../../kernel/abi.zig");
 
 const options = @import("options");
 
@@ -31,7 +33,11 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
 
     while (root.lock.swap(true, .acquire)) arch.cpu.relax();
 
-    arch.paging.activate(machine.kernel.root);
+    core.kicked = false;
+
+    // Every space maps the kernel the same way, so the caller's page tables stay active until another process is chosen.
+    const number = frame.rax;
+    var kept: ?*process.Process = null;
 
     if (core.current) |task| {
 
@@ -48,6 +54,9 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
 
             calls.handle(task, root.ticks);
 
+            // A call that leaves its caller ready carries on with it, rather than passing the processor on, unless it yields.
+            if (task.state == .ready and number != @intFromEnum(abi.Call.yield)) kept = task;
+
         } else if (frame.vector < 32) {
 
             root.log.decimal("isolated fault process", task.id);
@@ -59,12 +68,22 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
 
         }
 
+        if (task.doomed) {
+
+            task.state = .dead;
+            kept = null;
+
+        }
+
     } else {
 
         core.idle.frame = frame.*;
         core.idle.floating = floating.*;
 
     }
+
+    // Nothing may free the page tables still active here, and an idle processor holds none of them.
+    if (kept == null) arch.paging.activate(machine.kernel.root);
 
     if (frame.vector == 32) core.ticks += 1;
     if (frame.vector == 32 and core.id == root.primary) root.ticks +|= 1;
@@ -76,20 +95,25 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
     root.reap();
     service.maintain();
 
-    const selected = schedule.choose(root.processes, core.id, core.last_id);
+    const selected = kept orelse schedule.choose(root.processes, core.id, core.last_id);
     var result: *const arch.context.Context = &core.idle;
 
     if (selected) |task| {
 
         task.state = .running;
+        task.home = core.id;
         core.current = task;
         core.last_id = task.id;
-        core.switches += 1;
+        if (kept == null) core.switches += 1;
 
-        arch.paging.activate(task.space.root);
+        // Unmapping leaves stale translations behind, which reloading the page tables flushes.
+        if (kept == null or number == @intFromEnum(abi.Call.release) or number == @intFromEnum(abi.Call.detach)) arch.paging.activate(task.space.root);
         result = &task.context;
 
     }
+
+    // Whatever became ready that this processor cannot run goes to idle ones at once.
+    machine.kick(core, schedule.waiting(root.processes));
 
     if (options.self_test) check.verify();
     root.lock.store(false, .release);

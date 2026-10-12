@@ -166,7 +166,7 @@ fn desktop() !void {
     grown.area.width = spec.area.width + 40;
     try display.place(id, grown);
     try refused(display.place(id, covering), error.Invalid);
-    try refused(display.present(id ^ 1, 0, 0), error.Invalid);
+    try refused(display.present(id ^ 1, 0, 0, null), error.Invalid);
     try expect(try api.exchange(display.endpoint, protocol.pack(.input, 0), &none) == protocol.denied);
 
 }

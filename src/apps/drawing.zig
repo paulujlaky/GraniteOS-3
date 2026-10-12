@@ -167,6 +167,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     if (!(catalog.picture(argument) and load(argument))) blank(page) catch api.exit(3);
 
     canvas.track = &drag;
+    canvas.cursor = .crosshair;
 
     window = gui.Window.open(&root, .{
 
@@ -436,6 +437,8 @@ fn drag(node: *gui.Node, track: gui.Track) void {
 
     };
 
+    const layered = previewed != null;
+
     switch (track.phase) {
 
         .down => begin(point),
@@ -444,7 +447,8 @@ fn drag(node: *gui.Node, track: gui.Track) void {
 
     }
 
-    window.invalidate(node);
+    // Strokes reach the display as image changes alone; the window repaints only when the preview layer comes or goes.
+    if (track.phase != .move or layered != (previewed != null)) window.invalidate(node);
 
 }
 

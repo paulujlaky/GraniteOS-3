@@ -122,7 +122,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
     if (image == .usb and host == null) host = if (pci.find(.{ .class = 0x0c0330 })) |at| pci.bar(at, 0) else null;
     if (image == .usb and host == null) return error.NoDevice;
 
-    const task = try root.spawn(bytes, argument, owner.home);
+    const task = try root.spawn(bytes, argument, root.quietest());
     errdefer task.state = .dead;
 
     task.owner = owner.id;

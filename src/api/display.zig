@@ -276,12 +276,26 @@ pub const Display = struct {
 
     }
 
-    /// Shows the first `length` bytes of commands in buffer half `half` of surface `id`.
-    pub fn present(self: *Display, id: u64, half: u1, length: usize) api.ServiceError!void {
+    /// Shows the first `length` bytes of commands in buffer half `half` of surface `id`; only the `changed` part of its content
+    /// is drawn afresh, or all of it when null.
+    pub fn present(self: *Display, id: u64, half: u1, length: usize, changed: ?Area) api.ServiceError!void {
 
         if (id > 0xff or length > 0xffff_ffff) return error.Invalid;
 
-        _ = try self.request(.present, @intCast(id | @as(u64, half) << 8 | @as(u64, length) << 9), &.{});
+        var area = changed orelse Area{};
+        const window: []u8 = if (changed == null) &.{} else std.mem.asBytes(&area);
+
+        _ = try self.request(.present, @intCast(id | @as(u64, half) << 8 | @as(u64, length) << 9), window);
+
+    }
+
+    /// Shows pointer `look`, a `gui.Cursor`, while the pointer is over surface `id`'s content; with `id` `Spec.none`, the busy look
+    /// shows everywhere until the next new window appears or a few seconds pass, as after launching an app.
+    pub fn cursor(self: *Display, id: u64, look: u8) api.ServiceError!void {
+
+        if (id > 0xff) return error.Invalid;
+
+        _ = try self.request(.cursor, @intCast(id | @as(u64, look) << 8), &.{});
 
     }
 

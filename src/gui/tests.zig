@@ -663,3 +663,58 @@ test "recorded shapes, curves, and shadows replay where a sketch would paint the
     try std.testing.expectEqual(0xffffff, screen[24 * 48 + 0]);
 
 }
+
+test "labels keep descenders inside a box one line tall and stay centred in taller ones" {
+
+    const face = font.sans();
+
+    for ([_]f32{ 13, 15, 20 }) |size| {
+
+        const line = canvas.Rect{
+
+            .width = 100,
+            .height = text.leading(face, size),
+
+        };
+        const start = canvas.anchor(face, "gyp", size, line, .left);
+        const descent = @as(f32, @floatFromInt(@abs(face.descent))) * size / face.units;
+
+        try std.testing.expect(@as(f32, @floatFromInt(start.y)) + descent <= @as(f32, @floatFromInt(line.bottom())) + 0.5);
+
+    }
+
+    // Capitals sit midway down a control, as before.
+    const button = canvas.Rect{
+
+        .width = 100,
+        .height = 32,
+
+    };
+    const capital = @as(f32, @floatFromInt(face.capital)) * 15 / face.units;
+
+    try std.testing.expectEqual(@as(i32, @intFromFloat(@round((32 + capital) / 2))), canvas.anchor(face, "Save", 15, button, .center).y);
+
+}
+
+test "every pointer image points at a pixel of its own" {
+
+    const cursor = @import("cursor.zig");
+
+    for (std.enums.values(cursor.Cursor)) |look| {
+
+        const image = cursor.sprite(look);
+
+        try std.testing.expectEqual(image.width * image.height, image.pixels.len);
+        try std.testing.expect(image.hotspot.x >= 0 and image.hotspot.x < image.width);
+        try std.testing.expect(image.hotspot.y >= 0 and image.hotspot.y < image.height);
+
+    }
+
+    // Turned images keep their outline: the upright double arrow is the sideways one across the diagonal.
+    const sideways = cursor.sprite(.horizontal);
+    const upright = cursor.sprite(.vertical);
+
+    try std.testing.expectEqual(sideways.width, upright.height);
+    try std.testing.expectEqual(sideways.pixels[4 * sideways.width + 0], upright.pixels[0 * upright.width + 4]);
+
+}

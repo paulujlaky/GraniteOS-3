@@ -469,7 +469,7 @@ fn paint(node: *gui.Node, target: *gui.List) void {
 
         }, gui.shade(theme.accent, 150));
 
-        target.text(text, .mono, size, area.x + margin, y + @as(i32, @intFromFloat(@as(f32, @floatFromInt(gui.font.face(.mono).ascent)) * size / gui.font.face(.mono).units)), theme.text);
+        target.text(text, .mono, size, area.x + margin, y + gui.ascent(gui.font.face(.mono), size), theme.text);
 
     }
 

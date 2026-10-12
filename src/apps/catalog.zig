@@ -31,6 +31,14 @@ pub const apps = [_]App{
 
 };
 
+/// Launches `image` with `argument`, the pointer showing busy until its window appears.
+pub fn start(image: Image, argument: []const u8) api.ServiceError!void {
+
+    gui.cursor.busy();
+    _ = try api.launch(@tagName(image), argument);
+
+}
+
 pub fn find(image: Image) ?*const App {
 
     for (&apps) |*app| {

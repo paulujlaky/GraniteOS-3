@@ -57,7 +57,11 @@ pub const Process = struct {
     /// Device interrupts raised since the last `receive`, one bit per ISA line.
     signals: u64 = 0,
 
+    /// The processor it last ran on, which takes it first; an idle processor may take it over.
     home: u32,
+
+    /// Stopped while it ran on another processor; it dies when that processor next enters the kernel.
+    doomed: bool = false,
 
     /// Timer ticks that interrupted the process while it ran: its processor time at 100 Hz.
     preemptions: usize = 0,

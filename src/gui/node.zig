@@ -10,6 +10,7 @@ const theme = @import("theme.zig");
 
 const Rect = canvas.Rect;
 const Point = canvas.Point;
+const Cursor = @import("cursor.zig").Cursor;
 const List = draw.List;
 const Style = style.Style;
 const Text = text.Text;
@@ -85,6 +86,9 @@ pub const Node = struct {
     /// Runs on a right-click, or Shift+F10 while focused, with where its menu should open in surface coordinates; see `gui.Menu`.
     menu: ?*const fn (*Node, Point) void = null,
 
+    /// What the pointer shows over the node, when not what `pointer` picks.
+    cursor: ?Cursor = null,
+
     /// Free for the app, such as an index into its own data.
     data: usize = 0,
 
@@ -110,6 +114,16 @@ pub const Node = struct {
     pub fn editable(self: *const Node) bool {
 
         return self.content == .input or self.content == .area;
+
+    }
+
+    /// What the pointer shows over the node: its own `cursor`, else text over fields, a hand over what clicks, and the arrow elsewhere.
+    pub fn pointer(self: *const Node) Cursor {
+
+        if (self.cursor) |chosen| return chosen;
+        if (self.editable()) return .text;
+
+        return if (self.action != null or self.open != null) .hand else .arrow;
 
     }
 
@@ -672,7 +686,7 @@ pub const Node = struct {
 
         if (edit.length == 0) {
 
-            target.text(edit.placeholder, box.face, box.size, area.x, area.y + baseline(face, box.size), box.muted);
+            target.text(edit.placeholder, box.face, box.size, area.x, area.y + text.ascent(face, box.size), box.muted);
 
         }
 
@@ -722,7 +736,7 @@ pub const Node = struct {
 
             };
 
-            target.text(string[span.start..span.end], box.face, box.size, area.x, y + baseline(face, box.size), color);
+            target.text(string[span.start..span.end], box.face, box.size, area.x, y + text.ascent(face, box.size), color);
 
             if (focused and span.holds(string, edit.caret)) target.fill(.{
 
@@ -738,9 +752,3 @@ pub const Node = struct {
     }
 
 };
-
-fn baseline(face: *const font.Font, size: f32) i32 {
-
-    return @intFromFloat(@as(f32, @floatFromInt(face.ascent)) * size / face.units);
-
-}

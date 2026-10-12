@@ -542,7 +542,7 @@ test "interrupts wake a receiving service and coalesce while it is busy" {
 
 }
 
-test "scheduler rotates ready processes without running blocked or foreign tasks" {
+test "scheduler rotates its own ready processes first and takes over others only when idle" {
 
     var first = task(1);
     var second = task(2);
@@ -555,9 +555,13 @@ test "scheduler rotates ready processes without running blocked or foreign tasks
     first.state = .receiving;
     second.home = 1;
     try std.testing.expectEqual(&third, schedule.choose(&first, 0, 3).?);
+    try std.testing.expectEqual(2, schedule.waiting(&first));
     third.state = .running;
-    try std.testing.expectEqual(null, schedule.choose(&first, 0, 0));
+    try std.testing.expectEqual(&second, schedule.choose(&first, 0, 0).?);
     try std.testing.expectEqual(&second, schedule.choose(&first, 1, 0).?);
+    second.state = .sleeping;
+    try std.testing.expectEqual(null, schedule.choose(&first, 0, 0));
+    try std.testing.expectEqual(0, schedule.waiting(&first));
 
 }
 

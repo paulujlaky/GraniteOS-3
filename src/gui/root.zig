@@ -15,6 +15,8 @@ pub const Icon = font.Icon;
 pub const sans = font.sans;
 pub const theme = @import("theme.zig");
 pub const png = @import("png.zig");
+pub const cursor = @import("cursor.zig");
+pub const Cursor = cursor.Cursor;
 
 pub const style = @import("style.zig");
 pub const Style = style.Style;
@@ -25,6 +27,7 @@ pub const Node = @import("node.zig").Node;
 pub const Track = @import("node.zig").Track;
 pub const Text = @import("text.zig").Text;
 pub const leading = @import("text.zig").leading;
+pub const ascent = @import("text.zig").ascent;
 pub const Image = @import("image.zig").Image;
 pub const Graph = @import("graph.zig").Graph;
 pub const sketch = @import("sketch.zig");

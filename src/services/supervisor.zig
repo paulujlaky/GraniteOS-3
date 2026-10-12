@@ -142,7 +142,7 @@ fn maintain() void {
 
 }
 
-/// Forgets apps that exited and stops those whose session ended; a stop on a running app is retried next pass.
+/// Forgets apps that exited and stops those whose session ended; one running on another processor dies as it next enters the kernel.
 fn reap() void {
 
     for (&apps) |*app| {

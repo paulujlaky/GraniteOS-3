@@ -38,29 +38,6 @@ const least = gui.Rect{
 
 const saved = "/system/display";
 
-const arrow = [_]*const [12]u8{
-
-    "X...........",
-    "XX..........",
-    "XOX.........",
-    "XOOX........",
-    "XOOOX.......",
-    "XOOOOX......",
-    "XOOOOOX.....",
-    "XOOOOOOX....",
-    "XOOOOOOOX...",
-    "XOOOOOOOOX..",
-    "XOOOOOOOOOX.",
-    "XOOOOOOXXXXX",
-    "XOOOXOOX....",
-    "XOOX.XOOX...",
-    "XOX..XOOX...",
-    "XX....XOOX..",
-    "X.....XOOX..",
-    ".......XX...",
-
-};
-
 /// The boot framebuffer, drawn by the CPU with a software pointer.
 const Frame = struct {
 
@@ -98,15 +75,17 @@ const Frame = struct {
 
     fn overlay(self: *Frame, row: []u32, x: usize, y: usize) void {
 
-        const line = @as(i64, @intCast(y)) - pointer.y;
-        if (line < 0 or line >= arrow.len) return;
+        const worn = gui.cursor.sprite(look);
+        const at = sprite(pointer);
+        const line = @as(i64, @intCast(y)) - at.y;
+        if (line < 0 or line >= worn.height) return;
 
-        for (arrow[@intCast(line)], 0..) |shape, column| {
+        for (worn.pixels[@as(usize, @intCast(line)) * worn.width ..][0..worn.width], 0..) |pixel, column| {
 
-            const offset = pointer.x + @as(i64, @intCast(column)) - @as(i64, @intCast(x));
-            if (shape == '.' or offset < 0 or offset >= row.len) continue;
+            const offset = at.x + @as(i64, @intCast(column)) - @as(i64, @intCast(x));
+            if (pixel >> 24 == 0 or offset < 0 or offset >= row.len) continue;
 
-            row[@intCast(offset)] = self.convert(if (shape == 'X') 0x000000 else 0xffffff);
+            row[@intCast(offset)] = self.convert(pixel);
 
         }
 
@@ -132,8 +111,12 @@ const none = api.display.Spec.none;
 
 const border = 1;
 
-/// The invisible band around a window that grabs its edges for resizing.
-const grip = 6;
+/// The invisible band around a window that grabs its edges for resizing, and how far the grip reaches inside its frame.
+const grip = 8;
+const hold = 3;
+
+/// How far along an edge from a corner the grip takes both edges.
+const corner_grip = 20;
 
 /// How far a window's shadow spreads past its frame.
 const spread = 20;
@@ -181,6 +164,9 @@ const Surface = struct {
     /// Closed by its client, and only showing until its leaving transition ends.
     leaving: bool = false,
 
+    /// What the pointer shows over its content, as its client last said.
+    cursor: gui.Cursor = .arrow,
+
     fn decorated(self: *const Surface) bool {
 
         return self.layer == .window;
@@ -213,6 +199,48 @@ const Surface = struct {
     fn resizable(self: *const Surface) bool {
 
         return self.decorated() and !self.options.fixed and self.tile != .full;
+
+    }
+
+    /// The title bar's controls, with the frame beside and above them, which the grip leaves to clicks.
+    fn controls(self: *const Surface) gui.Rect {
+
+        const outer = self.frame();
+        const width = control * @as(i32, if (self.options.fixed) 2 else 3) + border;
+
+        return .{
+
+            .x = outer.right() - width,
+            .y = outer.y,
+            .width = width,
+            .height = theme.title,
+
+        };
+
+    }
+
+    /// Two rectangles crossing in a plus that the frame covers wholly, its rounded corners left out; nothing beneath them shows.
+    fn solid(self: *const Surface) [2]gui.Rect {
+
+        if (!self.decorated() or !self.visible() or self.transition != null) return .{ .{}, .{} };
+
+        const outer = self.frame();
+
+        return .{ .{
+
+            .x = outer.x,
+            .y = outer.y + theme.corner,
+            .width = outer.width,
+            .height = outer.height - 2 * theme.corner,
+
+        }, .{
+
+            .x = outer.x + theme.corner,
+            .y = outer.y,
+            .width = outer.width - 2 * theme.corner,
+            .height = outer.height,
+
+        } };
 
     }
 
@@ -410,8 +438,12 @@ var reserved = [2]i32{ 0, 0 };
 /// The window list changed since the session last heard.
 var changed = false;
 
-/// The part of the screen to redraw before waiting for the next request.
-var stale: gui.Rect = .{};
+/// The parts of the screen to redraw before waiting for the next request; changes far apart redraw apart.
+var stale = [_]gui.Rect{.{}} ** 4;
+
+/// What the pointer shows, and until which tick it shows busy for an app being launched.
+var look: gui.Cursor = .arrow;
+var launching: u64 = 0;
 
 var clipboard: [64 * 1024]u8 = undefined;
 var copied: usize = 0;
@@ -469,22 +501,34 @@ pub export fn app_main(_: usize, base: usize, environment: *const api.abi.Enviro
 
     while (true) {
 
-        // Everything the last request changed draws once, after its answer let the client carry on.
+        // Everything the last requests changed draws once, after their answers let their clients carry on.
         const moving = animate();
 
+        dress();
         redraw();
 
-        // While something moves, waiting for a request must not stall its next pose, a tick away.
-        const request = api.receive(!moving) catch {
+        // While something moves, or the pointer shows busy for a while, waiting for a request must not stall what comes next.
+        const timed = moving or launching != 0;
+        var request = api.receive(!timed) catch {
 
-            if (moving) api.sleep(1);
+            if (timed) api.sleep(if (moving) 1 else 5);
             continue;
 
         };
 
-        if (respond(request)) |result| api.reply(request, result) catch {
+        // Requests already waiting, such as input and the drawing it leads to, are answered before the screen redraws, up to a frame's worth.
+        var answered: usize = 0;
 
-        };
+        while (true) : (answered += 1) {
+
+            if (respond(request)) |result| api.reply(request, result) catch {
+
+            };
+
+            if (answered == 31) break;
+            request = api.receive(false) catch break;
+
+        }
 
         announce();
 
@@ -536,22 +580,7 @@ fn open(size: gui.Rect) bool {
     }
 
     adopt(memory, size);
-
-    var cursor: [arrow.len * arrow[0].len]u32 = undefined;
-
-    for (arrow, 0..) |row, y| {
-
-        for (row, 0..) |shape, x| cursor[y * row.len + x] = switch (shape) {
-
-            'X' => 0xff000000,
-            'O' => 0xffffffff,
-            else => 0,
-
-        };
-
-    }
-
-    screen.svga.shape(&cursor, arrow[0].len, arrow.len, .{});
+    wear(&screen.svga);
     screen.svga.point(pointer);
 
     if (renderer) |*old| old.release();
@@ -753,6 +782,7 @@ fn respond(request: api.Request) ?u64 {
         .forget => forget(request, value),
         .clipboard => paste(request, value),
         .capture => snapshot(request),
+        .cursor => pointing(request, value),
         .crash => if (request.first == api.raw(.owner, 0, 0, 0).first) fault() else protocol.invalid,
         else => protocol.invalid,
 
@@ -874,15 +904,47 @@ fn present(request: api.Request, value: u64) u64 {
     surface.half = @intCast(value >> 8 & 1);
     surface.size = length;
 
-    // A surface's first frame plays it in.
+    // A surface's first frame plays it in, and a window's ends the busy pointer of the launch that opened it.
     if (!surface.shown) {
 
         surface.shown = true;
+        if (surface.decorated()) launching = 0;
         if (motion.away(surface.movement())) |away| _ = begin(@intCast(value & 0xff), .enter, away.pose, .rest, away.length);
+
+        compose(surface.footprint());
 
     }
 
-    if (!surface.minimized) compose(surface.footprint());
+    // Its frame and shadow stay as they were, so only the content that changed draws afresh.
+    if (!surface.minimized) compose(if (request.fourth >= @sizeOf(api.display.Area)) changed: {
+
+        const damage = fetch(request, api.display.Area) orelse break :changed surface.area;
+
+        break :changed gui.draw.move(rect(damage), corner(surface.area)).intersect(surface.area) orelse return 0;
+
+    } else surface.area);
+
+    return 0;
+
+}
+
+/// Sets what the pointer shows over a surface's content; naming no surface, shows it busy while an app the client launched starts.
+fn pointing(request: api.Request, value: u64) u64 {
+
+    const shape = std.enums.fromInt(gui.Cursor, value >> 8 & 0xff) orelse return protocol.invalid;
+
+    if (value & 0xff == none) {
+
+        if (shape != .busy) return protocol.invalid;
+        launching = api.ticks() + 400;
+
+        return 0;
+
+    }
+
+    const surface = owned(request, value & 0xff) orelse return protocol.invalid;
+
+    surface.cursor = shape;
 
     return 0;
 
@@ -1068,14 +1130,53 @@ fn image(request: api.Request, handle: u64) u64 {
 
     if (renderer) |*device| device.upload(slot.?, picture.canvas.pixels, width, height, touched);
 
-    // Whatever shows the image draws it afresh.
+    // Only where the client's surfaces show the part that changed draws afresh.
     for (stack[0..depth]) |index| {
 
-        if (surfaces[index].client == request.first and surfaces[index].visible()) compose(surfaces[index].footprint());
+        const surface = &surfaces[index];
+        if (surface.client != request.first or !surface.visible()) continue;
+
+        var commands = gui.draw.iterate(surface.commands());
+
+        while (commands.next()) |command| {
+
+            const shown = switch (command) {
+
+                .image => |shown| shown,
+                else => continue,
+
+            };
+
+            if (shown.handle != handle) continue;
+
+            const area = scaled(touched, whole, shown.area).intersect(shown.clip) orelse continue;
+
+            compose(gui.draw.move(area, corner(surface.area)).intersect(surface.area) orelse continue);
+
+        }
 
     }
 
     return 0;
+
+}
+
+/// Where `piece` of a `whole` image lands when the image is stretched over `onto`, a pixel wider each way for filtering.
+fn scaled(piece: gui.Rect, whole: gui.Rect, onto: gui.Rect) gui.Rect {
+
+    const left = @divFloor(@as(i64, piece.x) * onto.width, whole.width) - 1;
+    const top = @divFloor(@as(i64, piece.y) * onto.height, whole.height) - 1;
+    const right = std.math.divCeil(i64, @as(i64, piece.right()) * onto.width, whole.width) catch unreachable;
+    const bottom = std.math.divCeil(i64, @as(i64, piece.bottom()) * onto.height, whole.height) catch unreachable;
+
+    return .{
+
+        .x = onto.x + @as(i32, @intCast(left)),
+        .y = onto.y + @as(i32, @intCast(top)),
+        .width = @intCast(right + 1 - left),
+        .height = @intCast(bottom + 1 - top),
+
+    };
 
 }
 
@@ -1112,25 +1213,99 @@ fn paste(request: api.Request, value: u64) u64 {
 
 }
 
-/// Marks `area` of the screen for redrawing once the current request is answered, so a burst of changes draws once.
+/// Marks `area` of the screen for redrawing once the current requests are answered, so a burst of changes draws once;
+/// it joins any marked area it touches, and with every slot taken, the one that grows least by taking it in.
 fn compose(area: gui.Rect) void {
 
-    stale = stale.join(area);
+    var fresh = area.intersect(back.bounds()) orelse return;
+    var grew = true;
+
+    // Joining may make the area touch others, which it then takes in too.
+    while (grew) {
+
+        grew = false;
+
+        for (&stale) |*marked| {
+
+            if (marked.width == 0 or marked.inset(-1).intersect(fresh) == null) continue;
+
+            fresh = fresh.join(marked.*);
+            marked.* = .{};
+            grew = true;
+
+        }
+
+    }
+
+    for (&stale) |*marked| {
+
+        if (marked.width != 0) continue;
+
+        marked.* = fresh;
+        return;
+
+    }
+
+    var best: usize = 0;
+    var cheapest: i64 = std.math.maxInt(i64);
+
+    for (stale, 0..) |marked, index| {
+
+        const joined = marked.join(fresh);
+        const growth = @as(i64, joined.width) * joined.height - @as(i64, marked.width) * marked.height;
+
+        if (growth < cheapest) {
+
+            cheapest = growth;
+            best = index;
+
+        }
+
+    }
+
+    stale[best] = stale[best].join(fresh);
 
 }
 
-/// Redraws what `compose` marked, from the surface stack, bottom to top, on the GPU when there is one.
+/// Redraws each area `compose` marked.
 fn redraw() void {
 
-    const visible = stale.intersect(back.bounds()) orelse return;
+    for (&stale) |*marked| {
 
-    stale = .{};
+        const visible = marked.*;
+
+        marked.* = .{};
+        if (visible.width != 0) render(visible);
+
+    }
+
+}
+
+/// The stack position from which surfaces show in `visible`: the topmost window wholly covering it, or the bottom.
+fn floor(visible: gui.Rect) usize {
+
+    var position = depth;
+
+    while (position > 0) {
+
+        position -= 1;
+
+        for (surfaces[stack[position]].solid()) |cover| if (cover.encloses(visible)) return position;
+
+    }
+
+    return 0;
+
+}
+
+/// Redraws `visible` from the surface stack, bottom to top, on the GPU when there is one.
+fn render(visible: gui.Rect) void {
 
     if (renderer) |*device| {
 
         device.begin(visible);
 
-        for (stack[0..depth]) |index| {
+        for (stack[floor(visible)..depth]) |index| {
 
             const surface = &surfaces[index];
             if (!surface.drawn()) continue;
@@ -1279,7 +1454,7 @@ fn paint(visible: gui.Rect) void {
 
     back.fill(visible, theme.desktop);
 
-    for (stack[0..depth]) |index| {
+    for (stack[floor(visible)..depth]) |index| {
 
         const surface = &surfaces[index];
 
@@ -1503,7 +1678,9 @@ fn track() void {
         const previous = hot;
 
         hot = next;
-        for ([_]?Hot{ previous, next }) |entry| if (entry) |spot| if (spot.part != .content) compose(surfaces[spot.index].frame());
+
+        // Only the controls light up under the pointer.
+        for ([_]?Hot{ previous, next }) |entry| if (entry) |spot| if (lights(spot.part)) compose(surfaces[spot.index].controls());
 
     }
 
@@ -2395,15 +2572,16 @@ fn trim(index: usize) gui.draw.List {
 
 }
 
-/// Which part of surface `index` is at `at`.
+/// Which part of surface `index` is at `at`: the grip reaches a little inside the frame, but never over the title bar's controls.
 fn part(index: usize, at: gui.Point) Part {
 
     const surface = &surfaces[index];
-    if (!surface.decorated() or surface.area.contains(at)) return .content;
+    if (!surface.decorated()) return .content;
 
     const frame = surface.frame();
-    if (!frame.contains(at) or at.y >= frame.y + theme.title or at.x < frame.x + border) return if (surface.resizable()) .edge else .title;
-    if (at.y < frame.y + border and surface.resizable()) return .edge;
+    if (surface.resizable() and !frame.inset(hold).contains(at) and !surface.controls().contains(at)) return .edge;
+    if (surface.area.contains(at)) return .content;
+    if (at.y >= frame.y + theme.title or at.x < frame.x + border) return .title;
 
     const slot = @divTrunc(frame.right() - border - 1 - at.x, control);
     const fixed = surface.options.fixed;
@@ -2423,32 +2601,98 @@ fn part(index: usize, at: gui.Point) Part {
 fn edges(index: usize, at: gui.Point) Edges {
 
     const frame = surfaces[index].frame();
-    const reach = 16;
 
     var sides = Edges{
 
-        .left = at.x < frame.x + border,
-        .right = at.x >= frame.right() - border,
-        .top = at.y < frame.y + border,
-        .bottom = at.y >= frame.bottom() - border,
+        .left = at.x < frame.x + hold,
+        .right = at.x >= frame.right() - hold,
+        .top = at.y < frame.y + hold,
+        .bottom = at.y >= frame.bottom() - hold,
 
     };
 
     if (sides.left or sides.right) {
 
-        sides.top = sides.top or at.y < frame.y + reach;
-        sides.bottom = sides.bottom or at.y >= frame.bottom() - reach;
+        sides.top = sides.top or at.y < frame.y + corner_grip;
+        sides.bottom = sides.bottom or at.y >= frame.bottom() - corner_grip;
 
     }
 
     if (sides.top or sides.bottom) {
 
-        sides.left = sides.left or at.x < frame.x + reach;
-        sides.right = sides.right or at.x >= frame.right() - reach;
+        sides.left = sides.left or at.x < frame.x + corner_grip;
+        sides.right = sides.right or at.x >= frame.right() - corner_grip;
 
     }
 
     return sides;
+
+}
+
+/// Whether `which` part of a title bar lights up under the pointer.
+fn lights(which: Part) bool {
+
+    return which == .minimize or which == .maximize or which == .close;
+
+}
+
+/// What the pointer shows where it is: a resizing arrow or a hand on a window's frame, else what the surface's client asked for.
+fn appearance() gui.Cursor {
+
+    if (grabbed) |held| return if (@as(u4, @bitCast(held.edges)) == 0) .grabbing else stretching(held.edges);
+
+    // A press in a surface's content keeps its pointer until release, wherever it goes.
+    const index = capture orelse under(pointer) orelse return .arrow;
+    const chosen = if (capture != null) surfaces[index].cursor else switch (part(index, pointer)) {
+
+        .content => surfaces[index].cursor,
+        .title => .grab,
+        .edge => stretching(edges(index, pointer)),
+        else => .hand,
+
+    };
+
+    // A launch shows busy in place of the pointers that only point.
+    return if (launching != 0 and (chosen == .arrow or chosen == .hand)) .busy else chosen;
+
+}
+
+fn stretching(sides: Edges) gui.Cursor {
+
+    if (sides.left and sides.top or sides.right and sides.bottom) return .falling;
+    if (sides.right and sides.top or sides.left and sides.bottom) return .rising;
+
+    return if (sides.left or sides.right) .horizontal else .vertical;
+
+}
+
+/// Shows the pointer `appearance` picks, once it changes, and lets a launch's busy pointer lapse.
+fn dress() void {
+
+    if (launching != 0 and api.ticks() >= launching) launching = 0;
+
+    const wanted = appearance();
+    if (wanted == look) return;
+
+    const before = sprite(pointer);
+
+    look = wanted;
+
+    switch (screen) {
+
+        .svga => |*device| wear(device),
+        .frame => |*frame| frame.present(&back, before.join(sprite(pointer))),
+
+    }
+
+}
+
+/// Gives the adapter's own pointer the image of `look`.
+fn wear(device: *svga.Device) void {
+
+    const worn = gui.cursor.sprite(look);
+
+    device.shape(worn.pixels, worn.width, worn.height, worn.hotspot);
 
 }
 
@@ -2700,14 +2944,17 @@ fn corner(area: gui.Rect) gui.Point {
 
 }
 
+/// Where the pointer's image covers the screen when it points at `at`.
 fn sprite(at: gui.Point) gui.Rect {
+
+    const worn = gui.cursor.sprite(look);
 
     return .{
 
-        .x = at.x,
-        .y = at.y,
-        .width = arrow[0].len,
-        .height = arrow.len,
+        .x = at.x - worn.hotspot.x,
+        .y = at.y - worn.hotspot.y,
+        .width = @intCast(worn.width),
+        .height = @intCast(worn.height),
 
     };
 

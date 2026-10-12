@@ -34,6 +34,9 @@ pub const Core = struct {
     last_id: u64 = 0,
     idle: context.Context,
 
+    /// Sent a `wake` interrupt it has not yet taken.
+    kicked: bool = false,
+
     ticks: u64 = 0,
     switches: u64 = 0,
     preemptions: u64 = 0,
@@ -46,6 +49,9 @@ pub var core_count: usize = 0;
 
 /// ISA interrupt `n` arrives as vector `legacy + n`.
 pub const legacy = 48;
+
+/// Interrupts an idle processor so it picks up a process that became ready, rather than at its next timer tick.
+pub const wake = 0xf0;
 
 // The MADT, kept to route device interrupts.
 var routes: []const u8 = &.{};
@@ -264,6 +270,25 @@ pub fn route(irq: u4, target: u32) !void {
     try kernel.identity(address, 4096, paging.writable | paging.nx | paging.uncached);
     try kernel.protect(address, paging.writable | paging.nx | paging.uncached);
     if (!apic.redirect(line, legacy + @as(u8, irq), target)) return error.NoDevice;
+
+}
+
+/// Sends idle processors other than `self` a `wake` interrupt, one for each of `ready` processes waiting to run.
+pub fn kick(self: *const Core, ready: usize) void {
+
+    var left = ready;
+    var current = cores;
+
+    while (current) |core| : (current = core.next) {
+
+        if (left == 0) return;
+        if (core == self or core.current != null or core.kicked or !core.online.load(.acquire)) continue;
+
+        core.kicked = true;
+        apic.send(core.id, 0x4000 | wake);
+        left -= 1;
+
+    }
 
 }
 

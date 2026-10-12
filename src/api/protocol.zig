@@ -53,6 +53,7 @@ pub const Operation = enum(u8) {
     reload,
     session,
     notify,
+    cursor,
     _,
 
 };

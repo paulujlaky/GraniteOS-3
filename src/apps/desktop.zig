@@ -642,7 +642,7 @@ fn cycle() void {
 fn start_app(image: api.abi.Image, argument: []const u8) void {
 
     dismiss();
-    _ = api.launch(@tagName(image), argument) catch {
+    catalog.start(image, argument) catch {
 
     };
 

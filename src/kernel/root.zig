@@ -104,6 +104,37 @@ pub fn spawn(bytes: []const u8, argument: usize, home: u32) !*process.Process {
 
 }
 
+/// The processor with the fewest live processes homed on it, so new ones spread across them.
+pub fn quietest() u32 {
+
+    var best = primary;
+    var least: usize = std.math.maxInt(usize);
+    var cores = machine.cores;
+
+    while (cores) |core| : (cores = core.next) {
+
+        var count: usize = 0;
+        var current = processes;
+
+        while (current) |task| : (current = task.next) {
+
+            if (task.home == core.id and task.state != .dead) count += 1;
+
+        }
+
+        if (count < least) {
+
+            least = count;
+            best = core.id;
+
+        }
+
+    }
+
+    return best;
+
+}
+
 pub fn ready() void {
 
     if (framebuffer) |display| {

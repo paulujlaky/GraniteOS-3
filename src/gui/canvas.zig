@@ -34,6 +34,13 @@ pub const Rect = struct {
 
     }
 
+    /// Whether `other` lies wholly inside.
+    pub fn encloses(self: Rect, other: Rect) bool {
+
+        return other.x >= self.x and other.y >= self.y and other.right() <= self.right() and other.bottom() <= self.bottom();
+
+    }
+
     pub fn intersect(self: Rect, other: Rect) ?Rect {
 
         const left = @max(self.x, other.x);
@@ -671,9 +678,12 @@ pub fn anchor(face: *const font.Font, string: []const u8, size: f32, area: Rect,
 
     const scale = size / face.units;
     const span: i32 = @intFromFloat(@ceil(face.measure(string, scale)));
+    const tall: f32 = @floatFromInt(area.height);
     const height = @as(f32, @floatFromInt(face.capital)) * scale;
+    const descent = @as(f32, @floatFromInt(@abs(face.descent))) * scale;
 
-    // Capitals, or a whole icon, sit midway down the area.
+    // Capitals, or a whole icon, sit midway down the area, unless descenders would then hang out of it, as in a box one line tall,
+    // where the baseline sits at the font's ascent instead.
     return .{
 
         .x = switch (alignment) {
@@ -683,7 +693,7 @@ pub fn anchor(face: *const font.Font, string: []const u8, size: f32, area: Rect,
             .right => area.right() - span,
 
         },
-        .y = area.y + @as(i32, @intFromFloat(@round((@as(f32, @floatFromInt(area.height)) + height) / 2))),
+        .y = area.y + @as(i32, @intFromFloat(@round(@min((tall + height) / 2, tall - descent)))),
 
     };
 

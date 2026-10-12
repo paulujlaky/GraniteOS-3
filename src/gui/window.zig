@@ -322,9 +322,10 @@ pub const Window = struct {
 
         }
 
-        if (self.damage.intersect(bounds) == null and self.surface.attached) return;
+        const changed = self.damage.intersect(bounds);
+        if (changed == null and self.surface.attached) return;
 
-        // The GPU redraws a whole window cheaply, so every change re-records the tree; a root draws its own background, rounded, and only windows get one when it has none.
+        // Every change re-records the tree, though the display draws afresh only what changed; a root draws its own background, rounded, and only windows get one when it has none.
         const background = self.root.style.background orelse theme.background;
 
         self.damage = .{};
@@ -349,7 +350,7 @@ pub const Window = struct {
 
         }
 
-        self.surface.present() catch self.refresh();
+        self.surface.present(changed) catch self.refresh();
 
     }
 
@@ -386,6 +387,11 @@ pub const Window = struct {
                     self.hovered = target;
 
                 }
+
+                // A drag keeps the pointer it began with.
+                const holder = self.tracking orelse if (self.selecting) self.focused else target;
+
+                self.surface.point(if (holder) |found| found.pointer() else .arrow);
 
                 return true;
 

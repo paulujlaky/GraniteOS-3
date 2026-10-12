@@ -2,6 +2,8 @@ const canvas = @import("canvas.zig");
 const draw = @import("draw.zig");
 const image = @import("image.zig");
 
+const Cursor = @import("cursor.zig").Cursor;
+
 const api = @import("api");
 
 /// A window's drawing commands, rendered by the display; re-attached automatically if the display restarts.
@@ -18,6 +20,9 @@ pub const Surface = struct {
 
     /// Taken off the screen until the next `present` after `hidden` clears.
     hidden: bool = false,
+
+    /// The pointer the display shows over the surface.
+    look: Cursor = .arrow,
 
     /// Allocates `capacity` bytes for each half of the command buffer; nothing shows until the first `present`.
     pub fn open(spec: api.display.Spec, capacity: usize) !Surface {
@@ -40,12 +45,20 @@ pub const Surface = struct {
 
     }
 
-    /// Shows what the list recorded, then starts a fresh list in the other half.
-    pub fn present(self: *Surface) !void {
+    /// Shows what the list recorded, then starts a fresh list in the other half; only the `changed` part differs from what showed, or all of it when null.
+    pub fn present(self: *Surface, changed: ?canvas.Rect) !void {
 
         if (self.hidden) return;
 
         const half = self.memory.bytes.len / 2;
+        var damage: ?api.display.Area = if (changed) |area| .{
+
+            .x = area.x,
+            .y = area.y,
+            .width = area.width,
+            .height = area.height,
+
+        } else null;
 
         for (0..2) |_| {
 
@@ -53,13 +66,15 @@ pub const Surface = struct {
 
                 self.id = try image.display.surface(self.memory.handle, self.spec);
                 self.attached = true;
+                damage = null;
 
-                // A restarted display forgot our images along with our surfaces.
+                // A restarted display forgot our images and pointer along with our surfaces.
                 image.republish();
+                self.look = .arrow;
 
             }
 
-            image.display.present(self.id, self.half, self.list.length) catch |err| {
+            image.display.present(self.id, self.half, self.list.length, damage) catch |err| {
 
                 if (err != error.Missing and err != error.Denied and err != error.Invalid) return err;
                 self.attached = false;
@@ -76,6 +91,16 @@ pub const Surface = struct {
         }
 
         return error.Missing;
+
+    }
+
+    /// Shows `wanted` while the pointer is over the surface, telling the display only when it changes.
+    pub fn point(self: *Surface, wanted: Cursor) void {
+
+        if (!self.attached or wanted == self.look) return;
+
+        image.display.cursor(self.id, @intFromEnum(wanted)) catch return;
+        self.look = wanted;
 
     }
 

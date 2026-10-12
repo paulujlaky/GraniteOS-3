@@ -280,8 +280,7 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
             if (!task.permits(.manage, 0, 1)) return error.Denied;
             const child = ipc.find(root.processes, frame.first) orelse return error.NoProcess;
             if (child.owner != task.id) return error.Denied;
-            if (child.state == .running) return error.Busy;
-            child.state = .dead;
+            if (child.state == .running) child.doomed = true else child.state = .dead;
 
         },
         .dma => {
