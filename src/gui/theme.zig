@@ -23,6 +23,14 @@ pub const faint = 0x5a5a5a;
 pub const accent = 0xeeeeee;
 pub const danger = 0xe5534b;
 
+/// Dark translucent chrome over the desktop, such as the bar, dock, and tags; the top byte is transparency, as `canvas.shade` makes it.
+pub const glass = 0x17101010;
+
+/// An area swept out with the pointer, as when selecting: a faint white fill inside a lighter, softly rounded edge.
+pub const sweep_fill = 0xe6ffffff;
+pub const sweep_edge = 0x73ffffff;
+pub const sweep_radius = 4;
+
 pub const radius = 6;
 pub const corner = 10;
 pub const border = 1;

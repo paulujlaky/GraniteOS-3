@@ -553,7 +553,18 @@ pub const Gpu = struct {
 
         self.flush();
         self.device.submit(set_render_target, &.{ context, color0, layer, 0, 0 });
-        self.device.submit(clear, &.{ context, clear_color, 0, @bitCast(@as(f32, 1)), 0, @intCast(area.x), @intCast(area.y), @intCast(area.width), @intCast(area.height) });
+
+        // A window's corner may hang off the screen, but only the layer's own pixels can be cleared.
+        const bounds = gui.Rect{
+
+            .width = @intCast(self.width),
+            .height = @intCast(self.height),
+
+        };
+
+        const cleared = area.intersect(bounds) orelse return;
+
+        self.device.submit(clear, &.{ context, clear_color, 0, @bitCast(@as(f32, 1)), 0, @intCast(cleared.x), @intCast(cleared.y), @intCast(cleared.width), @intCast(cleared.height) });
 
     }
 

@@ -51,6 +51,9 @@ pub const Options = struct {
     /// Casts a soft shadow, as undecorated pop-ups such as menus do.
     shadow: bool = false,
 
+    /// Slides away beneath tiled windows until the pointer reaches the bottom of the screen, as the dock does.
+    tuck: bool = false,
+
     /// How it animates as it shows and hides.
     motion: api.display.Motion = .auto,
 
@@ -133,6 +136,7 @@ pub const Window = struct {
             .fill = options.width == null and options.height == null,
             .fixed = options.fixed,
             .shadow = options.shadow,
+            .tuck = options.tuck,
 
         };
 
@@ -206,6 +210,7 @@ pub const Window = struct {
         self.focused = null;
         self.hovered = null;
         self.pressed = null;
+        self.tracking = null;
         self.refresh();
 
     }
@@ -469,6 +474,9 @@ pub const Window = struct {
                 self.tracking = new;
                 follow(new, at, .down);
 
+                // Something that can be dragged may still open on a double-click, such as a file.
+                if (repeated) if (new.open) |handler| handler(new);
+
                 return true;
 
             }
@@ -627,6 +635,9 @@ pub const Window = struct {
 
 var pasted: [64 * 1024]u8 = undefined;
 
+/// How many times the display was lost and our surfaces had to come back, so apps can redo what it forgot, such as the session's reserved rows.
+pub var restarts: u64 = 0;
+
 /// Repaints every window that changed, then waits up to `timeout` ticks for input to any of them; returns what no node handled.
 pub fn wait(windows: []const *Window, timeout: u64) ?Input {
 
@@ -642,6 +653,7 @@ pub fn wait(windows: []const *Window, timeout: u64) ?Input {
 
         }
 
+        restarts += 1;
         api.sleep(50);
 
         return null;

@@ -153,6 +153,20 @@ pub fn shrink(area: gui.Rect, target: gui.Point) Pose {
 
 }
 
+/// Ticks a panel takes to tuck away beneath a tiled window or come back.
+pub const slide = 14;
+
+/// The pose that slides `area` down past `floor`, the bottom of the screen, for tucking a panel away.
+pub fn sink(area: gui.Rect, floor: i32) Pose {
+
+    return .{
+
+        .y = @floatFromInt(floor - area.y),
+
+    };
+
+}
+
 /// Eases out: quick to start, settling gently.
 fn ease(t: f32) f32 {
 

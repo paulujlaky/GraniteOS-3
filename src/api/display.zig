@@ -43,7 +43,10 @@ pub const Options = packed struct(u8) {
     /// Casts a soft shadow, as windows do; for undecorated surfaces such as menus.
     shadow: bool = false,
 
-    reserved: u5 = 0,
+    /// Slides away beneath tiled windows until the pointer reaches the bottom of the screen, as the dock does; for panels.
+    tuck: bool = false,
+
+    reserved: u4 = 0,
 
 };
 
@@ -125,6 +128,9 @@ pub const Window = extern struct {
     state: State = .{},
     length: u8 = 0,
     title: [64]u8 = undefined,
+
+    /// Its frame on the screen, title bar included.
+    area: Area = .{},
 
     pub const State = packed struct(u8) {
 

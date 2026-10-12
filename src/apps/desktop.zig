@@ -1,4 +1,4 @@
-//! The signed-in desktop: wallpaper, top bar, dock, app launcher, menus, notifications, window switcher, and clipboard history, all surfaces of the login process.
+//! The signed-in desktop: wallpaper, top bar, dock, app launcher, menus, notifications, window switcher, clipboard history, and snips, all surfaces of the login process.
 
 const std = @import("std");
 
@@ -6,6 +6,7 @@ const about = @import("about.zig");
 const catalog = @import("catalog.zig");
 const clips = @import("clips.zig");
 const notices = @import("notices.zig");
+const snip = @import("snip.zig");
 const switcher = @import("switcher.zig");
 
 const api = @import("api");
@@ -19,8 +20,6 @@ const theme = gui.theme;
 const height = 30;
 const slot = 46;
 const margin = 8;
-
-const glass = gui.shade(0x101010, 232);
 
 const chip = gui.Style{
 
@@ -55,18 +54,35 @@ var dock: gui.Window = undefined;
 var launcher: gui.Window = undefined;
 
 /// Every surface of the desktop, for the event loop.
-var surfaces: [10]*gui.Window = undefined;
+var surfaces: [11]*gui.Window = undefined;
 
 /// The picture behind everything, shared with the lock screen.
 pub var backdrop: gui.Image = undefined;
 
-var scenery = gui.picture(&backdrop, .{
+var painting = gui.picture(&backdrop, .{
 
     .grow = 1,
 
 });
 
+/// The area the pointer sweeps out over the wallpaper while the button is held, for picking desktop items once there are some.
+var swath = gui.custom(&paint_swath, .{});
+var scenery_parts = [_]*gui.Node{ &painting, &swath };
+
+var scenery = gui.box(.{
+
+    .direction = .stack,
+
+}, &scenery_parts);
+
+/// Where a sweep began and where the pointer is.
+var swept: ?gui.Point = null;
+var reach = gui.Point{};
+
 var files = api.Files{};
+
+/// The `desktop` config, where Settings saves the wallpaper as `wallpaper=PATH`.
+var preferences = api.Config{};
 
 // Top bar.
 var apps_icon = gui.icon(.grid, theme.icon);
@@ -114,7 +130,7 @@ var bar_root = gui.box(.{
     .gap = 4,
     .items = .stretch,
 
-    .background = glass,
+    .background = theme.glass,
 
 }, &bar_parts);
 
@@ -133,7 +149,7 @@ var dock_root = gui.box(.{
     .direction = .row,
     .gap = 6,
 
-    .background = glass,
+    .background = theme.glass,
     .border = theme.line,
     .border_width = theme.border,
     .radius = 16,
@@ -193,7 +209,7 @@ var desktop_menu: gui.Menu(&.{
     .{ .icon = .folder, .title = "Files", .run = files_open },
     .{ .icon = .terminal, .title = "Terminal", .run = terminal_open },
     .{ .icon = .wallpaper, .title = "Change wallpaper", .run = settings_open },
-    .{ .icon = .image, .title = "Take screenshot", .run = screenshot },
+    .{ .icon = .image, .title = "Take screenshot", .hint = "Super+S", .run = screenshot },
     .{ .icon = .info, .title = "About GraniteOS", .run = about_open },
 
 }) = .{};
@@ -207,6 +223,9 @@ var leader: ?u32 = null;
 var home_bytes: [48]u8 = undefined;
 var home: []const u8 = "";
 var minute: u64 = std.math.maxInt(u64);
+
+/// The display restarts already seen.
+var restarted: u64 = 0;
 
 /// Opens every surface: the wallpaper now, the rest hidden until a session starts.
 pub fn init() void {
@@ -296,6 +315,7 @@ pub fn init() void {
     }
 
     apps.action = &toggle;
+    swath.track = &sweep;
     user.action = &reveal;
     search.action = &first;
 
@@ -339,6 +359,7 @@ pub fn init() void {
         .height = 1,
 
         .hidden = true,
+        .tuck = true,
 
     }) catch api.exit(3);
 
@@ -363,7 +384,8 @@ pub fn init() void {
     switcher.init(screen);
     clips.init(screen);
     about.init();
-    surfaces = .{ &wallpaper, &bar, &dock, &launcher, &account_menu.window, &desktop_menu.window, &notices.window, &switcher.window, &clips.window, &about.window };
+    snip.init();
+    surfaces = .{ &wallpaper, &bar, &dock, &launcher, &account_menu.window, &desktop_menu.window, &notices.window, &switcher.window, &clips.window, &about.window, &snip.window };
 
     place(screen);
 
@@ -385,13 +407,18 @@ pub fn start(name: []const u8) void {
 
     bar.show();
     dock.show();
+    claim();
+    reload();
+    refresh();
+
+}
+
+/// Keeps the rows of the bar and dock out of maximised windows' way.
+fn claim() void {
 
     gui.display.reserve(height, slot + 4 * margin) catch {
 
     };
-
-    reload();
-    refresh();
 
 }
 
@@ -399,6 +426,7 @@ pub fn start(name: []const u8) void {
 pub fn stop() void {
 
     dismiss();
+    snip.cancel();
     notices.clear();
     about.hide();
     bar.hide();
@@ -419,6 +447,15 @@ pub fn tick() void {
     if (search_text.version != searched) filter();
 
     notices.tick();
+    snip.tick();
+
+    // A restarted display forgot the rows the bar keeps, so once the bar is back it keeps them again.
+    if (restarted != gui.lost.* and bar.surface.attached) {
+
+        restarted = gui.lost.*;
+        claim();
+
+    }
 
     const now = api.clock();
     if (now / 60 == minute or bar.surface.hidden) return;
@@ -431,6 +468,13 @@ pub fn tick() void {
 
 }
 
+/// The most ticks the event loop may wait for input, so a delayed snip starts on time.
+pub fn patience(longest: u64) u64 {
+
+    return snip.patience(longest);
+
+}
+
 /// Handles input the desktop's surfaces did not; true when it was theirs.
 pub fn react(input: gui.Input) bool {
 
@@ -438,6 +482,7 @@ pub fn react(input: gui.Input) bool {
     const window = input.window;
 
     if (std.mem.indexOfScalar(*gui.Window, &surfaces, window) == null) return false;
+    if (snip.react(input)) return true;
 
     // Alt+Tab reaches whichever desktop surface the display hands it to.
     if (switcher.react(event)) return true;
@@ -487,7 +532,7 @@ pub fn react(input: gui.Input) bool {
 
                     ' ', 'a' => toggle(&apps),
                     'l' => session.lock(),
-                    's' => screenshot(),
+                    's' => snip.take(if (event.modifiers.shift) .region else .screen, home),
                     'e' => start_app(.explorer, home),
                     't' => start_app(.terminal, home),
                     'v' => {
@@ -521,14 +566,14 @@ pub fn react(input: gui.Input) bool {
 
 }
 
-/// Answers apps the session launched, such as Settings asking for the wallpaper to reload, or a timer showing a notification.
+/// Answers apps the session launched, such as Settings asking for the wallpaper to reload, a timer showing a notification, or Screenshots asking for a snip.
 pub fn serve() void {
 
     while (true) {
 
         const request = api.receive(false) catch return;
 
-        const result: u64 = switch (protocol.operation(request.second)) {
+        const result: ?u64 = switch (protocol.operation(request.second)) {
 
             .reload => blk: {
 
@@ -537,11 +582,13 @@ pub fn serve() void {
 
             },
             .notify => notify(request),
+            .snip => snip.ask(request, home),
             else => protocol.invalid,
 
         };
 
-        api.reply(request, result) catch {
+        // A snip answers once it is saved or cancelled.
+        if (result) |value| api.reply(request, value) catch {
 
         };
 
@@ -560,7 +607,7 @@ fn notify(request: api.Request) u64 {
     const message = bytes[0..request.fourth];
     const split = std.mem.indexOfScalar(u8, message, 0) orelse message.len;
 
-    notices.post(.bell, message[0..split], message[@min(split + 1, message.len)..]);
+    notices.post(.bell, message[0..split], message[@min(split + 1, message.len)..], null);
 
     return 0;
 
@@ -805,27 +852,55 @@ fn about_open() void {
 
 }
 
-var saved_bytes: [96]u8 = undefined;
+/// Follows a press on the wallpaper, sweeping out an area until the button comes up.
+fn sweep(_: *gui.Node, track: gui.Track) void {
 
-/// Saves the screen as `~/Screenshot DATE.png` and says so in a notification.
+    const before = swept_area();
+
+    switch (track.phase) {
+
+        .down => {
+
+            dismiss();
+            swept = track.at;
+
+        },
+        .move => {
+
+        },
+        .up => swept = null,
+
+    }
+
+    reach = track.at;
+
+    // Only around the area before and after repaints, its soft edge included.
+    for ([_]?gui.Rect{ before, swept_area() }) |entry| {
+
+        if (entry) |area| wallpaper.damage = wallpaper.damage.join(area.inset(-2));
+
+    }
+
+}
+
+/// The area swept out so far, once the pointer has moved from where the press began.
+fn swept_area() ?gui.Rect {
+
+    const from = swept orelse return null;
+
+    return if (std.meta.eql(from, reach)) null else gui.Rect.spanning(from, reach);
+
+}
+
+fn paint_swath(_: *gui.Node, target: *gui.List) void {
+
+    target.sweep(swept_area() orelse return);
+
+}
+
 fn screenshot() void {
 
-    var arena = std.heap.ArenaAllocator.init(api.pages);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-    const area = wallpaper.surface.list.bounds();
-    const pixels = allocator.alloc(u32, @intCast(area.width * area.height)) catch return;
-    const size = gui.display.capture(pixels) catch return;
-    const bytes = gui.png.encode(allocator, pixels, @intCast(size.width), @intCast(size.height)) catch return;
-    const date = api.Date.init(api.clock());
-    var path_bytes: [128]u8 = undefined;
-    const name = std.fmt.bufPrint(&saved_bytes, "Screenshot {d}-{d:0>2}-{d:0>2} {d:0>2}.{d:0>2}.{d:0>2}.png", .{ date.year, date.month, date.day, date.hour, date.minute, date.second }) catch return;
-    const path = std.fmt.bufPrint(&path_bytes, "{s}/{s}", .{ home, name }) catch return;
-
-    files.save(allocator, path, bytes) catch return notices.post(.warning, "Could not save the screenshot", home);
-
-    notices.post(.image, "Screenshot saved", name);
+    snip.take(.screen, home);
 
 }
 
@@ -848,32 +923,8 @@ fn shutdown() void {
 /// Shows the wallpaper the user chose in Settings, or granite when there is none or it will not load.
 fn reload() void {
 
-    var path_bytes: [256]u8 = undefined;
-    const path = preference(&path_bytes) orelse return replace(null);
-
-    replace(path);
-
-}
-
-/// The wallpaper path saved in `~/.desktop` as `wallpaper=PATH`.
-fn preference(out: []u8) ?[]const u8 {
-
-    var name_bytes: [64]u8 = undefined;
-    const name = std.fmt.bufPrint(&name_bytes, "{s}/.desktop", .{home}) catch return null;
-    const bytes = files.read(name, 0, files.window.len) catch return null;
-    var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
-
-    while (lines.next()) |line| {
-
-        if (!std.mem.startsWith(u8, line, "wallpaper=") or line.len - 10 > out.len) continue;
-
-        @memcpy(out[0 .. line.len - 10], line[10..]);
-
-        return out[0 .. line.len - 10];
-
-    }
-
-    return null;
+    preferences.open(user_label.content.label, "desktop");
+    replace(preferences.get("wallpaper"));
 
 }
 
@@ -914,14 +965,7 @@ fn load(allocator: std.mem.Allocator, path: []const u8) !gui.Image {
 
     if (path.len == 0) return error.Missing;
 
-    const bytes = try files.load(allocator, path);
-    const size = try gui.png.size(bytes);
-    var picture = try gui.Image.init(size.width, size.height);
-
-    errdefer picture.deinit();
-    _ = try gui.png.decode(allocator, bytes, picture.pixels());
-
-    return picture;
+    return gui.Image.decode(allocator, try files.load(allocator, path));
 
 }
 

@@ -26,6 +26,7 @@ pub const apps = [_]App{
     .{ .image = .calculator, .title = "Calculator", .icon = .calculator, .summary = "Work out sums" },
     .{ .image = .clock, .title = "Clock", .icon = .clock, .summary = "World time, stopwatch, and timer" },
     .{ .image = .calendar, .title = "Calendar", .icon = .calendar, .summary = "Months, weeks, and holidays" },
+    .{ .image = .screenshots, .title = "Screenshots", .icon = .cut, .summary = "Snip the screen and keep your screenshots" },
     .{ .image = .monitor, .title = "Monitor", .icon = .activity, .summary = "Watch processes, memory, and processors" },
     .{ .image = .settings, .title = "Settings", .icon = .settings, .summary = "Display, appearance, and accounts" },
 
@@ -78,6 +79,50 @@ pub fn symbol(name: []const u8, directory: bool) gui.Icon {
     }
 
     return if (std.ascii.endsWithIgnoreCase(name, ".txt") or std.ascii.endsWithIgnoreCase(name, ".md")) .document else .file;
+
+}
+
+/// The folder in each home that screenshots and snips are saved in.
+pub const screenshots = "Screenshots";
+
+/// What went wrong with a file, as people read it.
+pub fn reason(err: api.ServiceError) []const u8 {
+
+    return switch (err) {
+
+        error.Missing => "Not found.",
+        error.Exists => "Something with that name already exists.",
+        error.Full => "The volume is full.",
+        error.Busy => "Only empty folders can be deleted.",
+        error.Denied => "Permission denied.",
+        error.Invalid => "That can't be done here.",
+        else => "The file service is unavailable.",
+
+    };
+
+}
+
+pub const unnamed = "Names need a character or two, and no slashes.";
+
+/// Whether `name` may name a file or folder.
+pub fn valid(name: []const u8) bool {
+
+    return name.len != 0 and name.len <= 200 and std.mem.indexOfScalar(u8, name, '/') == null and !std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, "..");
+
+}
+
+/// A size in bytes as people read it, such as `4.2 KB`.
+pub fn amount(allocator: std.mem.Allocator, bytes: u64) ![]const u8 {
+
+    const units = [_][]const u8{ "bytes", "KB", "MB", "GB" };
+    var value: f64 = @floatFromInt(bytes);
+    var unit: usize = 0;
+
+    while (value >= 1024 and unit + 1 < units.len) : (unit += 1) value /= 1024;
+
+    if (unit == 0) return std.fmt.allocPrint(allocator, "{d} {s}", .{ bytes, units[0] });
+
+    return std.fmt.allocPrint(allocator, "{d:.1} {s}", .{ value, units[unit] });
 
 }
 

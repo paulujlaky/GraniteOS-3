@@ -54,6 +54,7 @@ pub const Operation = enum(u8) {
     session,
     notify,
     cursor,
+    snip,
     _,
 
 };

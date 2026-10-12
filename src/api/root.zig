@@ -5,6 +5,8 @@ pub const protocol = @import("protocol.zig");
 pub const Terminal = @import("terminal.zig").Terminal;
 pub const files = @import("files.zig");
 pub const Files = files.Files;
+pub const config = @import("config.zig");
+pub const Config = config.Config;
 pub const Accounts = @import("accounts.zig").Accounts;
 pub const display = @import("display.zig");
 pub const Display = display.Display;
@@ -333,6 +335,42 @@ pub fn notify(title: []const u8, detail: []const u8) ServiceError!void {
     var bytes: [64 + 1 + 192]u8 = undefined;
     if (title.len > 64 or detail.len > 192) return error.Invalid;
 
+    @memcpy(bytes[0..title.len], title);
+    bytes[title.len] = 0;
+    @memcpy(bytes[title.len + 1 ..][0..detail.len], detail);
+
+    _ = try desktop(protocol.pack(.notify, 0), bytes[0 .. title.len + 1 + detail.len]);
+
+}
+
+/// How a snip picks what it takes: an area dragged out, a window clicked, or the whole screen at once.
+pub const Snip = enum(u8) {
+
+    region,
+    window,
+    screen,
+    _,
+
+};
+
+/// Asks the caller's desktop for a snip after `delay` seconds, tucking window `surface` away meanwhile, and waits until it is
+/// saved or cancelled; returns the saved picture's path, kept in `out`, or null when cancelled.
+pub fn snip(kind: Snip, delay: u8, surface: u64, out: []u8) ServiceError!?[]const u8 {
+
+    if (surface > 0xff) return error.Invalid;
+
+    const length = try desktop(protocol.pack(.snip, @as(u56, @intCast(surface)) << 16 | @as(u56, delay) << 8 | @intFromEnum(kind)), out);
+
+    try supervised(length);
+    if (length == protocol.busy) return error.Busy;
+
+    return if (length == 0 or length > out.len) null else out[0..length];
+
+}
+
+/// Sends `message` and `window` to the caller's desktop, found through the supervisor on first use.
+fn desktop(message: u64, window: []u8) ServiceError!u64 {
+
     if (session == 0) {
 
         const id = try call(0, protocol.pack(.session, 0));
@@ -342,11 +380,7 @@ pub fn notify(title: []const u8, detail: []const u8) ServiceError!void {
 
     }
 
-    @memcpy(bytes[0..title.len], title);
-    bytes[title.len] = 0;
-    @memcpy(bytes[title.len + 1 ..][0..detail.len], detail);
-
-    _ = exchange(session, protocol.pack(.notify, 0), bytes[0 .. title.len + 1 + detail.len]) catch |err| {
+    return exchange(session, message, window) catch |err| {
 
         session = 0;
         return err;
@@ -520,8 +554,12 @@ pub fn exit(status: u64) noreturn {
 
 }
 
-fn fatal(_: []const u8, _: ?usize) noreturn {
+/// Logs a safety check's message and where it failed, for symbolizing against the image, then exits.
+fn fatal(message: []const u8, address: ?usize) noreturn {
 
+    var bytes: [160]u8 = undefined;
+
+    log(std.fmt.bufPrint(&bytes, "panic: {s} at 0x{x}\n", .{ message[0..@min(message.len, 100)], address orelse @returnAddress() }) catch "panic\n");
     exit(98);
 
 }

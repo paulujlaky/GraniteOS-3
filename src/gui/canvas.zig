@@ -28,6 +28,20 @@ pub const Rect = struct {
 
     }
 
+    /// The rectangle with corners at `from` and `to`, each pixel under them included, as a pointer sweeps one out.
+    pub fn spanning(from: Point, to: Point) Rect {
+
+        return .{
+
+            .x = @min(from.x, to.x),
+            .y = @min(from.y, to.y),
+            .width = @as(i32, @intCast(@abs(to.x - from.x))) + 1,
+            .height = @as(i32, @intCast(@abs(to.y - from.y))) + 1,
+
+        };
+
+    }
+
     pub fn contains(self: Rect, point: Point) bool {
 
         return point.x >= self.x and point.y >= self.y and point.x < self.right() and point.y < self.bottom();

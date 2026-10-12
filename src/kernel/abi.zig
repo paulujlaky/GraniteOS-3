@@ -87,6 +87,7 @@ pub const Image = enum(u64) {
     clock,
     calendar,
     drawing,
+    screenshots,
 
     /// Runs with application permissions rather than as a service.
     pub fn application(self: Image) bool {

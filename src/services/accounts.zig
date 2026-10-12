@@ -129,6 +129,11 @@ fn serve(message: api.Request, operation: protocol.Operation) !u64 {
 
             };
 
+            // Accounts made before configs had a folder of their own get one as they sign in.
+            nest(name, record.user) catch {
+
+            };
+
             try assign(message, identity);
 
             return @bitCast(identity);
@@ -238,6 +243,7 @@ fn create(caller: api.abi.Identity, name: []const u8, password: []const u8, priv
 
     try files.directory(path);
     try files.change(path, 0o700, next);
+    try nest(name, next);
 
     record = std.mem.zeroes(Record);
     record.user = next;
@@ -254,6 +260,18 @@ fn create(caller: api.abi.Identity, name: []const u8, password: []const u8, priv
     });
 
     return next;
+
+}
+
+/// Makes `/cfgs/NAME`, the folder of `user`'s app configs, private to them.
+fn nest(name: []const u8, user: u32) !void {
+
+    var bytes: [api.config.root.len + 1 + name_limit]u8 = undefined;
+    const path = std.fmt.bufPrint(&bytes, "{s}/{s}", .{ api.config.root, name }) catch unreachable;
+
+    files.directory(api.config.root) catch |err| if (err != error.Exists) return err;
+    files.directory(path) catch |err| if (err != error.Exists) return err;
+    try files.change(path, 0o700, user);
 
 }
 

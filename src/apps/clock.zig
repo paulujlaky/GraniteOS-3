@@ -27,11 +27,10 @@ const tab_icons = [_]gui.Icon{ .clock, .globe, .timer, .hourglass };
 const tab_titles = [_][]const u8{ "Clock", "World", "Stopwatch", "Timer" };
 
 var window: gui.Window = undefined;
-var files = api.Files{};
 var tab = Tab.clock;
 
-var home_bytes: [64]u8 = undefined;
-var home: []const u8 = "";
+/// The `clock` config, which keeps the world clock's offset.
+var preferences = api.Config{};
 
 var tab_nodes: [tab_titles.len]gui.Node = undefined;
 var tab_marks: [tab_titles.len]gui.Node = undefined;
@@ -357,8 +356,8 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
     var argument_bytes: [256]u8 = undefined;
 
-    home = std.fmt.bufPrint(&home_bytes, "{s}", .{catalog.home(api.argument(&argument_bytes)) orelse ""}) catch "";
-    load();
+    preferences.open(std.fs.path.basename(catalog.home(api.argument(&argument_bytes)) orelse ""), "clock");
+    offset = std.math.clamp(preferences.number(i32, "offset") orelse 0, -12 * 60, 14 * 60);
 
     dial_node = gui.figure(&dial, .{
 
@@ -725,39 +724,13 @@ fn zone_later(_: *gui.Node) void {
 fn move_zone(by: i32) void {
 
     offset = std.math.clamp(offset + by, -12 * 60, 14 * 60);
-    save();
-    world_fill(api.clock());
+    _ = preferences.set("offset", offset);
 
-}
-
-/// Reads the offset saved in `~/.clock` as `offset=MINUTES`.
-fn load() void {
-
-    var path_bytes: [96]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_bytes, "{s}/.clock", .{home}) catch return;
-    const bytes = files.read(path, 0, files.window.len) catch return;
-    var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
-
-    while (lines.next()) |line| {
-
-        if (std.mem.startsWith(u8, line, "offset=")) offset = std.math.clamp(std.fmt.parseInt(i32, line[7..], 10) catch 0, -12 * 60, 14 * 60);
-
-    }
-
-}
-
-fn save() void {
-
-    var path_bytes: [96]u8 = undefined;
-    var line_bytes: [32]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_bytes, "{s}/.clock", .{home}) catch return;
-    const line = std.fmt.bufPrint(&line_bytes, "offset={d}\n", .{offset}) catch return;
-
-    files.create(path) catch return;
-
-    files.write(path, 0, line) catch {
+    preferences.save() catch {
 
     };
+
+    world_fill(api.clock());
 
 }
 

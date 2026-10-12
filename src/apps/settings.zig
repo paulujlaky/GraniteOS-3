@@ -40,7 +40,8 @@ const sections = [_]struct { title: []const u8, icon: gui.Icon }{
 };
 
 var window: gui.Window = undefined;
-var files = api.Files{};
+/// The desktop's config, which keeps the wallpaper.
+var preferences = api.Config{};
 var accounts = api.Accounts{};
 var screen = api.Display{};
 
@@ -359,27 +360,12 @@ fn setMode(row: *gui.Node) void {
 
 }
 
-/// Writes the wallpaper choice to `~/.desktop` and asks the desktop to show it.
+/// Saves the wallpaper choice, empty for granite, in the `desktop` config and asks the desktop to show it.
 fn wallpaper(choice: []const u8) void {
 
-    var name: [96]u8 = undefined;
-    var line: [300]u8 = undefined;
-    const target = std.fmt.bufPrint(&name, "{s}/.desktop", .{home}) catch return;
-
-    if (choice.len == 0) {
-
-        files.create(target) catch {
-
-        };
-
-    } else {
-
-        const bytes = std.fmt.bufPrint(&line, "wallpaper={s}\n", .{choice}) catch return;
-
-        files.create(target) catch |err| return note(err);
-        files.write(target, 0, bytes) catch |err| return note(err);
-
-    }
+    preferences.open(user, "desktop");
+    if (!preferences.set("wallpaper", choice)) return note(error.Invalid);
+    preferences.save() catch |err| return note(err);
 
     _ = api.call(session, protocol.pack(.reload, 0)) catch {
 

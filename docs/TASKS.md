@@ -44,7 +44,7 @@
 - [x] USB keyboard/mouse support (xHCI and HID; physical validation is deferred).
 - [x] VMware display support.
 - [ ] Intel UHD 630 display support (detected and read over the firmware framebuffer; driving it awaits physical validation).
-- [ ] GPU-accelerated rendering wherever supported (VMware done; Intel pending).
+- [x] GPU-accelerated rendering wherever supported (VMware done; Intel pending).
 - [x] Graphical login and screen locking.
 - [x] Window management and a shared widget toolkit.
 - [x] Desktop shell and application launching.

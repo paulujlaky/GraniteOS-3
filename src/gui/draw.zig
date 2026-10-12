@@ -3,6 +3,7 @@ const std = @import("std");
 const canvas = @import("canvas.zig");
 const font = @import("font.zig");
 const sketch = @import("sketch.zig");
+const theme = @import("theme.zig");
 
 const Rect = canvas.Rect;
 const Point = canvas.Point;
@@ -259,6 +260,57 @@ pub const List = struct {
     pub fn icon(self: *List, which: font.Icon, size: f32, area: Rect, color: u32) void {
 
         self.label(which.text(), .icons, size, area, color, .center);
+
+    }
+
+    /// Traces the inside of `area` with an anti-aliased line `width` pixels wide, its corners rounded to `radius`.
+    pub fn outline(self: *List, area: Rect, radius: f32, width: f32, color: u32) void {
+
+        const half = width / 2;
+
+        self.form(.{
+
+            .rectangle = .{
+
+                .x = @as(f32, @floatFromInt(area.x)) + @as(f32, @floatFromInt(area.width)) / 2,
+                .y = @as(f32, @floatFromInt(area.y)) + @as(f32, @floatFromInt(area.height)) / 2,
+
+                .rx = @as(f32, @floatFromInt(area.width)) / 2 - half,
+                .ry = @as(f32, @floatFromInt(area.height)) / 2 - half,
+
+                .radius = @max(radius - half, 0),
+                .half = half,
+
+            },
+
+        }, color);
+
+    }
+
+    /// Shows `area` being swept out with the pointer, as when selecting.
+    pub fn sweep(self: *List, area: Rect) void {
+
+        self.round(area, theme.sweep_radius, theme.sweep_fill);
+        self.outline(area, theme.sweep_radius, 1, theme.sweep_edge);
+
+    }
+
+    /// Draws `string`, after `which` if any, on a small dark tag, such as a hint or what a drag carries; `tagged` says where.
+    pub fn tag(self: *List, which: ?font.Icon, string: []const u8, area: Rect) void {
+
+        self.round(area, theme.radius, theme.glass);
+
+        var words = area.inset(tag_padding);
+
+        if (which) |shown| {
+
+            self.icon(shown, tag_icon, .{ .x = words.x, .y = area.y, .width = tag_icon, .height = area.height }, theme.text);
+            words.x += tag_icon + tag_gap;
+            words.width -= tag_icon + tag_gap;
+
+        }
+
+        self.label(string, .sans, theme.small, .{ .x = words.x, .y = area.y, .width = words.width, .height = area.height }, theme.text, .left);
 
     }
 
@@ -639,6 +691,28 @@ pub fn replay(target: *canvas.Canvas, bytes: []const u8, origin: Point, limit: R
         }
 
     }
+
+}
+
+const tag_padding = theme.spacing;
+const tag_icon = 16;
+const tag_gap = 6;
+
+/// Where `List.tag` draws `string` after `which`: its top-left at `at`, or its top centre with `centred`.
+pub fn tagged(which: ?font.Icon, string: []const u8, at: Point, centred: bool) Rect {
+
+    const face = font.face(.sans);
+    const words: i32 = @intFromFloat(@ceil(face.measure(string, theme.small / face.units)));
+    const width = words + 2 * tag_padding + @as(i32, if (which != null) tag_icon + tag_gap else 0);
+
+    return .{
+
+        .x = if (centred) at.x - @divTrunc(width, 2) else at.x,
+        .y = at.y,
+        .width = width,
+        .height = 26,
+
+    };
 
 }
 

@@ -230,7 +230,7 @@ fn choose(node: *gui.Node) void {
 
     window.hide();
     gui.display.copy(entries[index][0..lengths[index]]) catch return;
-    notices.post(.clipboard, "Copied again", "Press Ctrl+V to paste it.");
+    notices.post(.clipboard, "Copied again", "Press Ctrl+V to paste it.", null);
 
 }
 

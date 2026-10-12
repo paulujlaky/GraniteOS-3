@@ -2,6 +2,8 @@ const std = @import("std");
 
 const api = @import("api");
 
+const png = @import("png.zig");
+
 const Canvas = @import("canvas.zig").Canvas;
 const Rect = @import("canvas.zig").Rect;
 const Sketch = @import("sketch.zig").Sketch;
@@ -43,6 +45,19 @@ pub const Image = struct {
             .height = height,
 
         };
+
+    }
+
+    /// A new image of the PNG in `bytes`, decoding with `allocator`'s scratch space; publish it to show it.
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !Image {
+
+        const size = try png.size(bytes);
+        var picture = try Image.init(size.width, size.height);
+
+        errdefer picture.deinit();
+        _ = try png.decode(allocator, bytes, picture.pixels());
+
+        return picture;
 
     }
 
@@ -111,11 +126,24 @@ pub const Image = struct {
 
         } else null);
 
-        for (published) |entry| if (entry == self) return;
+        const record = Published{
+
+            .handle = self.handle,
+            .width = self.width,
+            .height = self.height,
+
+        };
+
+        for (&published) |*entry| if (entry.* != null and entry.*.?.handle == self.handle) {
+
+            entry.* = record;
+            return;
+
+        };
 
         for (&published) |*entry| if (entry.* == null) {
 
-            entry.* = self;
+            entry.* = record;
             return;
 
         };
@@ -142,7 +170,16 @@ pub const Image = struct {
 /// The display connection every surface and image of this app shares.
 pub var display = api.Display{};
 
-var published = [_]?*Image{null} ** 32;
+/// What was published, by value rather than by pointer, since apps often publish an image and then move it elsewhere.
+const Published = struct {
+
+    handle: u64,
+    width: u32,
+    height: u32,
+
+};
+
+var published = [_]?Published{null} ** 32;
 
 /// Hands every published image to the display again, after it restarted and forgot them.
 pub fn republish() void {
@@ -159,7 +196,7 @@ pub fn republish() void {
 
 fn unpublish(picture: *Image) void {
 
-    for (&published) |*entry| if (entry.* == picture) {
+    for (&published) |*entry| if (entry.* != null and entry.*.?.handle == picture.handle) {
 
         entry.* = null;
         display.forget(picture.handle);

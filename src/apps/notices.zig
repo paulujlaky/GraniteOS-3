@@ -2,6 +2,8 @@
 
 const std = @import("std");
 
+const catalog = @import("catalog.zig");
+
 const api = @import("api");
 const gui = @import("gui");
 
@@ -30,6 +32,19 @@ const Toast = struct {
     title_bytes: [64]u8,
     detail_bytes: [192]u8,
     since: u64,
+
+    /// The app a click opens, and what on.
+    opens: ?api.abi.Image,
+    argument_bytes: [256]u8,
+    argument_length: usize,
+
+};
+
+/// An app a toast opens when clicked, on `argument`, such as a picture it tells of.
+pub const Link = struct {
+
+    image: api.abi.Image,
+    argument: []const u8,
 
 };
 
@@ -92,6 +107,7 @@ pub fn init(screen: gui.Rect, top: i32) void {
 
         toast.node.action = &dismiss;
         toast.node.data = index;
+        toast.opens = null;
         toast.node.hidden = true;
         list[index] = &toast.node;
 
@@ -127,8 +143,8 @@ pub fn place(screen: gui.Rect, top: i32) void {
 
 }
 
-/// Shows a toast saying `title` over `detail`, newest at the top.
-pub fn post(icon: gui.Icon, title: []const u8, detail: []const u8) void {
+/// Shows a toast saying `title` over `detail`, newest at the top, which opens `link` when clicked, if any.
+pub fn post(icon: gui.Icon, title: []const u8, detail: []const u8, link: ?Link) void {
 
     // The oldest makes room, then every toast moves down one.
     var index: usize = most - 1;
@@ -147,6 +163,16 @@ pub fn post(icon: gui.Icon, title: []const u8, detail: []const u8) void {
     toast.detail.hidden = detail_length == 0;
     toast.node.hidden = false;
     toast.since = api.ticks();
+    toast.opens = null;
+
+    if (link) |target| if (target.argument.len <= toast.argument_bytes.len) {
+
+        toast.opens = target.image;
+        toast.argument_length = target.argument.len;
+        @memcpy(toast.argument_bytes[0..target.argument.len], target.argument);
+
+    };
+
     fit();
 
 }
@@ -180,8 +206,14 @@ pub fn clear() void {
 
 fn dismiss(node: *gui.Node) void {
 
-    toasts[node.data].node.hidden = true;
+    const toast = &toasts[node.data];
+
+    toast.node.hidden = true;
     fit();
+
+    if (toast.opens) |image| catalog.start(image, toast.argument_bytes[0..toast.argument_length]) catch {
+
+    };
 
 }
 
@@ -223,5 +255,8 @@ fn copy(to: *Toast, from: *const Toast) void {
     to.detail.hidden = from.detail.hidden;
     to.node.hidden = from.node.hidden;
     to.since = from.since;
+    to.opens = from.opens;
+    to.argument_bytes = from.argument_bytes;
+    to.argument_length = from.argument_length;
 
 }

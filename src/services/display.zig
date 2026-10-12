@@ -36,8 +36,6 @@ const least = gui.Rect{
 
 };
 
-const saved = "/system/display";
-
 /// The boot framebuffer, drawn by the CPU with a software pointer.
 const Frame = struct {
 
@@ -121,8 +119,8 @@ const corner_grip = 20;
 /// How far a window's shadow spreads past its frame.
 const spread = 20;
 
-/// The radius of a window's content corners, inside its frame's border.
-const curve = theme.corner - border;
+/// How near the bottom of the screen the pointer brings back a tucked dock.
+const brink = 3;
 
 /// Width of each control at the right of a title bar.
 const control = 40;
@@ -149,6 +147,9 @@ const Surface = struct {
 
     minimized: bool = false,
     tile: Tile = .free,
+
+    /// A panel with the `tuck` option, slid away beneath a tiled window.
+    tucked: bool = false,
 
     /// Where a tiled window goes back to.
     restore: gui.Rect = .{},
@@ -202,6 +203,20 @@ const Surface = struct {
 
     }
 
+    /// The radius of its frame's corners: square once tiled, so tiles meet the screen's edges and each other cleanly.
+    fn rounding(self: *const Surface) i32 {
+
+        return if (self.tile == .free) theme.corner else 0;
+
+    }
+
+    /// The radius of its content's corners, inside the frame's border.
+    fn curve(self: *const Surface) i32 {
+
+        return @max(self.rounding() - border, 0);
+
+    }
+
     /// The title bar's controls, with the frame beside and above them, which the grip leaves to clicks.
     fn controls(self: *const Surface) gui.Rect {
 
@@ -225,19 +240,20 @@ const Surface = struct {
         if (!self.decorated() or !self.visible() or self.transition != null) return .{ .{}, .{} };
 
         const outer = self.frame();
+        const radius = self.rounding();
 
         return .{ .{
 
             .x = outer.x,
-            .y = outer.y + theme.corner,
+            .y = outer.y + radius,
             .width = outer.width,
-            .height = outer.height - 2 * theme.corner,
+            .height = outer.height - 2 * radius,
 
         }, .{
 
-            .x = outer.x + theme.corner,
+            .x = outer.x + radius,
             .y = outer.y,
-            .width = outer.width - 2 * theme.corner,
+            .width = outer.width - 2 * radius,
             .height = outer.height,
 
         } };
@@ -247,14 +263,14 @@ const Surface = struct {
     /// Showing and taking input.
     fn visible(self: *const Surface) bool {
 
-        return self.client != 0 and self.shown and !self.minimized and !self.leaving;
+        return self.client != 0 and self.shown and !self.minimized and !self.tucked and !self.leaving;
 
     }
 
     /// On the screen, if only for the rest of a transition.
     fn drawn(self: *const Surface) bool {
 
-        return self.client != 0 and self.shown and (!self.minimized or self.transition != null);
+        return self.client != 0 and self.shown and (!(self.minimized or self.tucked) or self.transition != null);
 
     }
 
@@ -355,10 +371,13 @@ const Tile = enum {
     left,
     right,
 
-    /// The frame a window tiled this way fills; null when free.
+    /// The frame a window tiled this way fills, down to the bottom of the screen, where the dock tucks away beneath it; null when free.
     fn zone(self: Tile) ?gui.Rect {
 
-        const room = work();
+        var room = work();
+
+        room.height += reserved[1];
+
         const half = @divTrunc(room.width, 2);
 
         return switch (self) {
@@ -386,7 +405,9 @@ var settings: *const api.abi.Environment = undefined;
 var screen: Screen = undefined;
 var back: gui.Canvas = undefined;
 var backing: ?api.Shared = null;
-var files = api.Files{};
+
+/// The mode an administrator picked, kept in the `display` config.
+var saved = api.Config{};
 
 var renderer: ?gpu.Gpu = null;
 
@@ -505,6 +526,8 @@ pub export fn app_main(_: usize, base: usize, environment: *const api.abi.Enviro
     while (true) {
 
         // Everything the last requests changed draws once, after their answers let their clients carry on.
+        hideaway();
+
         const moving = animate();
 
         dress();
@@ -722,15 +745,12 @@ fn settle() void {
 
 fn load() ?gui.Rect {
 
-    const bytes = files.read(saved, 0, 4) catch return null;
-    if (bytes.len != 4) return null;
-
-    const value = std.mem.readInt(u32, bytes[0..4], .little);
+    saved.open(api.config.system, "display");
 
     const size = gui.Rect{
 
-        .width = @intCast(value & 0xffff),
-        .height = @intCast(value >> 16),
+        .width = saved.number(u16, "width") orelse return null,
+        .height = saved.number(u16, "height") orelse return null,
 
     };
 
@@ -740,17 +760,9 @@ fn load() ?gui.Rect {
 
 fn save(size: gui.Rect) void {
 
-    const value: u32 = @intCast(size.width | size.height << 16);
-
-    files.directory("/system") catch {
-
-    };
-
-    files.create(saved) catch {
-
-    };
-
-    files.write(saved, 0, &std.mem.toBytes(std.mem.nativeToLittle(u32, value))) catch api.log("display: could not save the mode\n");
+    _ = saved.set("width", size.width);
+    _ = saved.set("height", size.height);
+    saved.save() catch api.log("display: could not save the mode\n");
 
 }
 
@@ -1002,6 +1014,8 @@ fn windows(request: api.Request) u64 {
             .length = @intCast(surface.length),
             .title = surface.title,
 
+            .area = wire(surface.frame()),
+
         };
 
         count += 1;
@@ -1068,12 +1082,9 @@ fn reserve(request: api.Request, value: u64) u64 {
 
     reserved = .{ top, bottom };
 
-    for (&surfaces, 0..) |*surface, index| {
-
-        if (surface.client == 0 or surface.leaving) continue;
-        if (surface.tile.zone()) |zone| reshape(index, inside(zone));
-
-    }
+    // Tiles refit, and windows placed before the rows were kept, such as after a restart, come out from under the bar.
+    settle();
+    compose(back.bounds());
 
     return 0;
 
@@ -1384,12 +1395,12 @@ fn layers(device: *gpu.Gpu, index: usize, limit: gui.Rect, whole: bool) void {
     drawing = surface.client;
 
     const content = surface.area.intersect(limit) orelse return;
-    if (whole or !surface.decorated()) return device.render(surface.commands(), origin, content, texture);
+    if (whole or !surface.decorated() or surface.curve() == 0) return device.render(surface.commands(), origin, content, texture);
 
     const corners = gui.Corners{
 
         .area = surface.area,
-        .radius = curve,
+        .radius = surface.curve(),
 
     };
 
@@ -1422,7 +1433,7 @@ fn layers(device: *gpu.Gpu, index: usize, limit: gui.Rect, whole: bool) void {
 
         device.lift(square);
         device.render(surface.commands(), origin, clip, texture);
-        device.cut(surface.area, curve);
+        device.cut(surface.area, corners.radius);
         device.lower(square, .{ @floatFromInt(square.x), @floatFromInt(square.y), @floatFromInt(square.right()), @floatFromInt(square.bottom()) }, 1, clip);
 
     }
@@ -1442,18 +1453,18 @@ fn float(device: *gpu.Gpu, index: usize, visible: gui.Rect) void {
     layers(device, index, whole, true);
 
     // As `paint` does on the CPU, content is cut to the curve of the frame's bottom corners, and the frame fills in beneath.
-    if (surface.decorated()) {
+    if (surface.decorated() and surface.curve() != 0) {
 
         const corners = gui.Corners{
 
             .area = surface.area,
-            .radius = curve,
+            .radius = surface.curve(),
 
         };
 
         const decorations = trim(index);
 
-        device.cut(surface.area, curve);
+        device.cut(surface.area, corners.radius);
         device.blending(.under);
         drawing = 0;
 
@@ -1498,7 +1509,7 @@ fn paint(visible: gui.Rect) void {
         if (surface.area.intersect(visible)) |limit| {
 
             // A window's content is cut to the curve of its frame's bottom corners.
-            back.save(&kept, surface.area, if (surface.decorated()) curve else 0, limit);
+            back.save(&kept, surface.area, if (surface.decorated()) surface.curve() else 0, limit);
             gui.draw.replay(&back, surface.commands(), corner(surface.area), limit, pixels);
             back.trim(&kept);
 
@@ -2406,6 +2417,45 @@ fn conclude(index: usize) void {
 
 }
 
+/// Slides panels with the `tuck` option, such as the dock, away while the topmost window is tiled, and back while the pointer
+/// rests at the bottom of the screen, staying until it leaves them.
+fn hideaway() void {
+
+    var covered = false;
+    var position = depth;
+
+    // The topmost window rather than the focused one, since panels such as notifications take focus as they appear.
+    while (position > 0) {
+
+        position -= 1;
+
+        const surface = &surfaces[stack[position]];
+        if (!surface.decorated() or !surface.visible()) continue;
+
+        covered = surface.tile != .free;
+        break;
+
+    }
+
+    const bottom: i32 = @intCast(back.height);
+
+    for (&surfaces, 0..) |*surface, index| {
+
+        if (!surface.options.tuck or surface.client == 0 or !surface.shown or surface.leaving) continue;
+
+        // A drag reaching the bottom, such as of a window, leaves a tucked panel be.
+        const reached = if (surface.tucked) buttons == 0 and pointer.y >= bottom - brink else pointer.y >= surface.area.y - grip;
+        const tuck = covered and !reached;
+
+        if (tuck == surface.tucked) continue;
+
+        surface.tucked = tuck;
+        if (!begin(index, if (tuck) .minimize else .restore, null, if (tuck) motion.sink(surface.area, bottom) else .rest, motion.slide)) compose(surface.footprint());
+
+    }
+
+}
+
 /// Where minimised windows fly to: the middle of the row the session keeps at the bottom for its dock.
 fn dock() gui.Point {
 
@@ -2518,10 +2568,12 @@ fn trim(index: usize) gui.draw.List {
     });
 
     var below = frame;
+    const radius = surface.rounding();
+    const curve = surface.curve();
 
     // A soft shadow a little below the frame, darker under the window in front.
     below.y += 3;
-    if (surface.options.shadow or surface.decorated()) list.shadow(below, theme.corner, spread - 4, gui.shade(0x000000, if (active and surface.decorated()) 96 else 64));
+    if (surface.options.shadow or surface.decorated()) list.shadow(below, radius, spread - 4, gui.shade(0x000000, if (active and surface.decorated()) 96 else 64));
     if (!surface.decorated()) return list;
 
     const bar = gui.Rect{
@@ -2536,7 +2588,7 @@ fn trim(index: usize) gui.draw.List {
     // The title bar and its controls are the frame's rounded inside, cut to their own rectangles.
     const within = frame.inset(border);
 
-    list.round(frame, theme.corner, if (active) theme.selected else theme.line);
+    list.round(frame, radius, if (active) theme.selected else theme.line);
 
     // Content draws over its own background, so a window growing faster than its app redraws shows that rather than what lay behind.
     list.limit = gui.draw.move(surface.area, .{
@@ -2972,6 +3024,19 @@ fn rect(area: api.display.Area) gui.Rect {
         .y = area.y,
         .width = area.width,
         .height = area.height,
+
+    };
+
+}
+
+fn wire(from: gui.Rect) api.display.Area {
+
+    return .{
+
+        .x = from.x,
+        .y = from.y,
+        .width = from.width,
+        .height = from.height,
 
     };
 

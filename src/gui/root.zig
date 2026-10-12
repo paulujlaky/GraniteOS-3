@@ -45,6 +45,7 @@ pub const Window = @import("window.zig").Window;
 pub const Layer = @import("window.zig").Layer;
 pub const Input = @import("window.zig").Input;
 pub const wait = @import("window.zig").wait;
+pub const lost = &@import("window.zig").restarts;
 
 /// A container laying out `children` as `look` says.
 pub fn box(look: Style, children: []const *Node) Node {

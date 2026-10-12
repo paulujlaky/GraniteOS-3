@@ -157,15 +157,7 @@ fn load(target: []const u8) bool {
     defer arena.deinit();
 
     const bytes = files.load(arena.allocator(), target) catch return false;
-    const size = gui.png.size(bytes) catch return false;
-    var fresh = gui.Image.init(size.width, size.height) catch return false;
-
-    _ = gui.png.decode(arena.allocator(), bytes, fresh.pixels()) catch {
-
-        fresh.deinit();
-        return false;
-
-    };
+    var fresh = gui.Image.decode(arena.allocator(), bytes) catch return false;
 
     fresh.publish() catch {
 

@@ -49,6 +49,23 @@ var entries: []Entry = &.{};
 var lines: []gui.Node = &.{};
 var selected: ?usize = null;
 
+/// How far the pointer moves with the button down before a press on a row becomes a drag.
+const slack = 4;
+
+/// An entry being dragged to move it, and the folder it would land in, lit up, with whether it was selected before.
+var dragging: ?struct { source: usize, start: gui.Point, at: gui.Point, moved: bool = false } = null;
+
+/// What the tag beside a dragged entry shows, and where.
+const Tag = struct {
+
+    icon: gui.Icon,
+    words: []const u8,
+    area: gui.Rect,
+
+};
+var aimed: ?*gui.Node = null;
+var lit = false;
+
 var back = gui.tool(.back, &goBack);
 var forward = gui.tool(.forward, &goForward);
 var up = gui.tool(.up, &goUp);
@@ -201,6 +218,16 @@ var body = gui.box(.{
 var root_parts_all = [_]*gui.Node{ &toolbar, &body };
 var root = gui.box(.{}, &root_parts_all);
 
+/// A tag following the pointer while an entry is dragged, saying where it would go.
+var carried = gui.custom(&paintCarried, .{});
+var scene_parts = [_]*gui.Node{ &root, &carried };
+
+var scene = gui.box(.{
+
+    .direction = .stack,
+
+}, &scene_parts);
+
 var status_bytes: [96]u8 = undefined;
 
 pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
@@ -215,7 +242,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     home_place.action = &goHome;
     root_place.action = &goRoot;
 
-    window = gui.Window.open(&root, .{
+    window = gui.Window.open(&scene, .{
 
         .title = "Files",
         .application = .explorer,
@@ -347,7 +374,7 @@ fn reload(_: *gui.Node) void {
 
     location.content.label = path;
     window.retitle(if (std.mem.eql(u8, path, "/")) "Files" else std.fs.path.basename(path));
-    window.view(&root);
+    window.view(&scene);
     summarize();
     if (chosen) |name| select(name);
 
@@ -381,7 +408,7 @@ fn build(allocator: std.mem.Allocator) !void {
 
         });
 
-        sizes[index] = gui.label(if (entry.directory) "" else try amount(allocator, entry.size), theme.caption.with(.{
+        sizes[index] = gui.label(if (entry.directory) "" else try catalog.amount(allocator, entry.size), theme.caption.with(.{
 
             .width = 90,
             .text_align = .right,
@@ -392,6 +419,7 @@ fn build(allocator: std.mem.Allocator) !void {
         rows[index] = gui.box(theme.item, &parts[index]);
         rows[index].action = &pick;
         rows[index].open = &launch;
+        rows[index].track = &drag;
         rows[index].menu = &offerEntry;
         rows[index].data = index;
         children[index] = &rows[index];
@@ -403,21 +431,6 @@ fn build(allocator: std.mem.Allocator) !void {
     list.offset = 0;
     empty.hidden = entries.len != 0;
     list.hidden = entries.len == 0;
-
-}
-
-/// A size in bytes as people read it, such as `4.2 KB`.
-fn amount(allocator: std.mem.Allocator, bytes: u64) ![]const u8 {
-
-    const units = [_][]const u8{ "bytes", "KB", "MB", "GB" };
-    var value: f64 = @floatFromInt(bytes);
-    var unit: usize = 0;
-
-    while (value >= 1024 and unit + 1 < units.len) : (unit += 1) value /= 1024;
-
-    if (unit == 0) return std.fmt.allocPrint(allocator, "{d} {s}", .{ bytes, units[0] });
-
-    return std.fmt.allocPrint(allocator, "{d:.1} {s}", .{ value, units[unit] });
 
 }
 
@@ -438,24 +451,8 @@ fn summarize() void {
 
 fn report(err: api.ServiceError) void {
 
-    status.content.label = reason(err);
+    status.content.label = catalog.reason(err);
     window.refresh();
-
-}
-
-fn reason(err: api.ServiceError) []const u8 {
-
-    return switch (err) {
-
-        error.Missing => "Not found.",
-        error.Exists => "Something with that name already exists.",
-        error.Full => "The volume is full.",
-        error.Busy => "Only empty folders can be deleted.",
-        error.Denied => "Permission denied.",
-        error.Invalid => "That can't be done here.",
-        else => "The file service is unavailable.",
-
-    };
 
 }
 
@@ -480,6 +477,174 @@ fn pick(row: *gui.Node) void {
 fn launch(row: *gui.Node) void {
 
     open(row.data);
+
+}
+
+/// Follows a row dragged by the pointer, lighting up the folder it would move into, and moves it there when dropped.
+fn drag(row: *gui.Node, track: gui.Track) void {
+
+    var earlier_bytes: [300]u8 = undefined;
+    const earlier = tagged(&earlier_bytes);
+
+    switch (track.phase) {
+
+        .down => dragging = .{
+
+            .source = row.data,
+            .start = track.at,
+            .at = track.at,
+
+        },
+        .move => if (dragging) |*held| {
+
+            held.at = track.at;
+            if (!held.moved and @abs(track.at.x - held.start.x) + @abs(track.at.y - held.start.y) <= slack) return;
+
+            held.moved = true;
+            row.cursor = .grabbing;
+            aim(destination(window.root.hit(track.at), held.source));
+
+        },
+        .up => {
+
+            const held = dragging orelse return;
+            const target = aimed;
+
+            dragging = null;
+            row.cursor = null;
+            aim(null);
+            if (earlier) |shown| window.damage = window.damage.join(shown.area);
+            if (held.moved) if (target) |node| move(held.source, node);
+
+            return;
+
+        },
+
+    }
+
+    // Only where the tag was and is repaints.
+    var after_bytes: [300]u8 = undefined;
+
+    for ([_]?Tag{ earlier, tagged(&after_bytes) }) |entry| {
+
+        if (entry) |shown| window.damage = window.damage.join(shown.area);
+
+    }
+
+}
+
+/// The tag of the drag under way, just below and right of the pointer: the entry, and where it would move once over a folder.
+fn tagged(out: []u8) ?Tag {
+
+    const held = dragging orelse return null;
+    if (!held.moved) return null;
+
+    const entry = entries[held.source];
+    const words = if (aimed) |node| std.fmt.bufPrint(out, "Move {s} to {s}", .{ entry.name, named(node) }) catch entry.name else entry.name;
+    const icon = catalog.symbol(entry.name, entry.directory);
+
+    return .{
+
+        .icon = icon,
+        .words = words,
+        .area = gui.draw.tagged(icon, words, .{
+
+            .x = held.at.x + 14,
+            .y = held.at.y + 12,
+
+        }, false),
+
+    };
+
+}
+
+fn paintCarried(_: *gui.Node, target: *gui.List) void {
+
+    var bytes: [300]u8 = undefined;
+    const shown = tagged(&bytes) orelse return;
+
+    target.tag(shown.icon, shown.words, shown.area);
+
+}
+
+/// What people call the folder `node` stands for as a drop target.
+fn named(node: *gui.Node) []const u8 {
+
+    if (node == &home_place) return "Home";
+    if (node == &root_place) return "Computer";
+
+    if (node == &up) {
+
+        const parent = std.fs.path.dirnamePosix(path) orelse "/";
+
+        return if (std.mem.eql(u8, parent, "/")) "Computer" else std.fs.path.basename(parent);
+
+    }
+
+    return entries[node.data].name;
+
+}
+
+/// `found`, when entry `source` may be dropped on it: another folder in the list, a place, or the Up button for the parent folder.
+fn destination(found: ?*gui.Node, source: usize) ?*gui.Node {
+
+    const node = found orelse return null;
+    if (node == &home_place or node == &root_place or node == &up) return node;
+
+    for (lines, 0..) |*line, index| {
+
+        if (line == node) return if (index != source and entries[index].directory) node else null;
+
+    }
+
+    return null;
+
+}
+
+/// Lights up `node` as where a drop would land, giving the last one its own look back.
+fn aim(node: ?*gui.Node) void {
+
+    if (aimed == node) return;
+
+    if (aimed) |old| {
+
+        old.selected = lit;
+        window.invalidate(old);
+
+    }
+
+    aimed = node;
+
+    if (node) |new| {
+
+        lit = new.selected;
+        new.selected = true;
+        window.invalidate(new);
+
+    }
+
+}
+
+/// Moves entry `source` into the folder `node` stands for.
+fn move(source: usize, node: *gui.Node) void {
+
+    var inside_bytes: [512]u8 = undefined;
+    var from_bytes: [512]u8 = undefined;
+    var to_bytes: [512]u8 = undefined;
+    const name = entries[source].name;
+
+    const inside = if (node == &home_place) home else if (node == &root_place) "/" else if (node == &up) std.fs.path.dirnamePosix(path) orelse "/" else join(&inside_bytes, entries[node.data].name) orelse return;
+    const from = join(&from_bytes, name) orelse return;
+
+    if (std.mem.eql(u8, inside, path)) return;
+
+    // A folder cannot go inside itself.
+    if (std.mem.startsWith(u8, inside, from) and (inside.len == from.len or inside[from.len] == '/')) return report(error.Invalid);
+
+    const to = std.fmt.bufPrint(&to_bytes, "{s}{s}{s}", .{ inside, if (std.mem.endsWith(u8, inside, "/")) "" else "/", name }) catch return;
+
+    files.rename(from, to) catch |err| return report(err);
+    reload(&refresh);
 
 }
 
@@ -592,14 +757,14 @@ fn create(name: []const u8, directory: bool) void {
 
     var target: [512]u8 = undefined;
 
-    if (!valid(name)) return dialog.refuse(unnamed);
+    if (!catalog.valid(name)) return dialog.refuse(catalog.unnamed);
 
-    const full = join(&target, name) orelse return dialog.refuse(unnamed);
+    const full = join(&target, name) orelse return dialog.refuse(catalog.unnamed);
     const result = if (directory) files.directory(full) else files.create(full);
 
     result catch |err| {
 
-        return dialog.refuse(reason(err));
+        return dialog.refuse(catalog.reason(err));
 
     };
 
@@ -622,11 +787,11 @@ fn applyRename(name: []const u8) void {
     var from: [512]u8 = undefined;
     var to: [512]u8 = undefined;
 
-    if (!valid(name)) return dialog.refuse(unnamed);
+    if (!catalog.valid(name)) return dialog.refuse(catalog.unnamed);
 
     files.rename(join(&from, entries[index].name) orelse return, join(&to, name) orelse return) catch |err| {
 
-        return dialog.refuse(reason(err));
+        return dialog.refuse(catalog.reason(err));
 
     };
 
@@ -710,8 +875,6 @@ fn select(name: []const u8) void {
 
 }
 
-const unnamed = "Names need a character or two, and no slashes.";
-
 fn offerEntry(row: *gui.Node, at: gui.Point) void {
 
     choose(row.data);
@@ -785,11 +948,5 @@ fn copyable() bool {
 fn pasteable() bool {
 
     return copied.len != 0;
-
-}
-
-fn valid(name: []const u8) bool {
-
-    return name.len != 0 and name.len <= 200 and std.mem.indexOfScalar(u8, name, '/') == null and !std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, "..");
 
 }

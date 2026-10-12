@@ -246,7 +246,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         tick();
         desktop.tick();
 
-        if (gui.wait(all[0 .. surfaces.len + 1], 50)) |input| {
+        if (gui.wait(all[0 .. surfaces.len + 1], desktop.patience(50))) |input| {
 
             if (!desktop.react(input)) react(input.event);
 
