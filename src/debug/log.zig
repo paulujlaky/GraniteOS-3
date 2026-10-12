@@ -1,9 +1,20 @@
+const Lock = @import("../kernel/lock.zig").Lock;
+
+// Processors share one output, so each line holds this while it is written.
+var lock: Lock = .{};
+
+/// Set once a kernel failure has stopped the other processors, any of which may have stopped holding the lock.
+pub var stopped = false;
+
 pub const Log = struct {
 
     output: *const fn ([]const u8) void,
     scope: []const u8,
 
     pub fn line(self: Log, text: []const u8) void {
+
+        begin();
+        defer end();
 
         self.prefix();
         self.output(text);
@@ -13,10 +24,23 @@ pub const Log = struct {
 
     pub fn err(self: Log, message: []const u8) void {
 
+        begin();
+        defer end();
+
         self.prefix();
         self.output("error: ");
         self.output(message);
         self.output("\n");
+
+    }
+
+    /// Writes `bytes` unprefixed, such as a line a process wrote.
+    pub fn write(self: Log, bytes: []const u8) void {
+
+        begin();
+        defer end();
+
+        self.output(bytes);
 
     }
 
@@ -58,6 +82,9 @@ pub const Log = struct {
 
         }
 
+        begin();
+        defer end();
+
         self.prefix();
         self.output(label);
         self.output(" = ");
@@ -70,3 +97,15 @@ pub const Log = struct {
     }
 
 };
+
+fn begin() void {
+
+    if (!stopped) lock.acquire();
+
+}
+
+fn end() void {
+
+    if (!stopped) lock.release();
+
+}

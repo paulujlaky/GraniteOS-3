@@ -2,7 +2,9 @@ const arch = @import("../arch/root.zig");
 const root = @import("root.zig");
 const process = @import("process.zig");
 const shared = @import("shared.zig");
+const schedule = @import("schedule.zig");
 const boot = @import("../boot/info.zig");
+const Lock = @import("lock.zig").Lock;
 
 const Record = struct {
 
@@ -11,6 +13,9 @@ const Record = struct {
     role: usize,
 
 };
+
+// Every processor reports its test processes here.
+var lock: Lock = .{};
 
 var records: ?*Record = null;
 var initial_free: usize = 0;
@@ -182,6 +187,7 @@ fn spawn(role: usize, home: u32) !*process.Process {
     };
 
     records = record;
+    schedule.start(task);
 
     return task;
 
@@ -216,6 +222,9 @@ fn take(id: u64) ?usize {
 
 pub fn exited(task: *process.Process, status: u64) void {
 
+    lock.acquire();
+    defer lock.release();
+
     const role = take(task.id) orelse return;
 
     if (status != 0 or (role == 2 and task.preemptions < 2) or (role >= 3 and role != 6)) passed = false;
@@ -224,6 +233,9 @@ pub fn exited(task: *process.Process, status: u64) void {
 }
 
 pub fn faulted(task: *process.Process, frame: *const arch.context.Frame) void {
+
+    lock.acquire();
+    defer lock.release();
 
     const role = take(task.id) orelse return;
 
@@ -246,7 +258,12 @@ pub fn faulted(task: *process.Process, frame: *const arch.context.Frame) void {
 
 pub fn verify() void {
 
-    if (finished or records != null or root.processes != null) return;
+    if (@atomicLoad(bool, &finished, .monotonic)) return;
+
+    lock.acquire();
+    defer lock.release();
+
+    if (finished or records != null or !root.settled()) return;
     if (!passed or faults != 6 or successes != 3 + 2 * arch.machine.core_count or root.frames.free_count != initial_free) @panic("Kernel self-test failed");
 
     var current = arch.machine.cores;

@@ -4,8 +4,13 @@ const root = @import("root.zig");
 const process = @import("process.zig");
 const ipc = @import("ipc.zig");
 const abi = @import("abi.zig");
+const schedule = @import("schedule.zig");
 const pci = @import("../board/pc/pci.zig");
 const machine = @import("../arch/root.zig").machine;
+const Lock = @import("lock.zig").Lock;
+
+// Guards the supervisor's restart, device probing, and interrupt routing.
+var lock: Lock = .{};
 
 var listeners = [_]u64{0} ** 16;
 var supervisor: u64 = 0;
@@ -31,7 +36,7 @@ var probed = false;
 pub fn start() !void {
 
     const task = try root.spawn(@embedFile("supervisor"), @intFromBool(supervisor != 0), root.primary);
-    errdefer task.state = .dead;
+    errdefer root.kill(task, true);
 
     try task.configure(.service, &.{
 
@@ -42,10 +47,27 @@ pub fn start() !void {
     try task.grant(.manage, 0, 1);
     try task.grant(.power, 0, 1);
     try task.grant(.log, 0, 1);
+    try adopt(task);
 
-    var current = root.processes;
+    lock.acquire();
+    supervisor = task.id;
+    restarting = false;
+    lock.release();
 
-    while (current) |child| : (current = child.next) {
+    schedule.start(task);
+    root.log.line("supervisor started");
+
+}
+
+/// Hands the previous supervisor's children to `task`.
+fn adopt(task: *process.Process) !void {
+
+    root.processes.lock.acquire();
+    defer root.processes.lock.release();
+
+    var children = root.processes.iterate();
+
+    while (children.next()) |child| {
 
         if (child.owner != supervisor or child.image == null or child.state == .dead) continue;
         try child.grant(.send, task.id, 1);
@@ -54,24 +76,23 @@ pub fn start() !void {
     }
 
     // Publish ownership only after every replacement capability exists.
-    current = root.processes;
+    children = root.processes.iterate();
 
-    while (current) |child| : (current = child.next) {
+    while (children.next()) |child| {
 
         if (child.owner == supervisor and child.image != null) child.owner = task.id;
 
     }
 
-    supervisor = task.id;
-    restarting = false;
-    root.log.line("supervisor started");
-
 }
 
 pub fn endpoint(owner: u64) ipc.IpcError!u64 {
 
+    lock.acquire();
+    defer lock.release();
+
     if (owner == 0 or owner != supervisor) return error.PermissionDenied;
-    if (restarting or ipc.find(root.processes, supervisor) == null) return error.NoProcess;
+    if (restarting or root.processes.find(supervisor) == null) return error.NoProcess;
 
     return supervisor;
 
@@ -79,27 +100,49 @@ pub fn endpoint(owner: u64) ipc.IpcError!u64 {
 
 pub fn departed(id: u64) void {
 
+    lock.acquire();
+    defer lock.release();
+
     if (id != supervisor) return;
     restarting = true;
-    due = root.ticks +| 10;
+    due = root.ticks.load(.monotonic) +| 10;
 
 }
 
 pub fn maintain() void {
 
-    if (!restarting or attempts == 3 or root.ticks < due) return;
-    attempts += 1;
+    if (!@atomicLoad(bool, &restarting, .monotonic)) return;
+
+    lock.acquire();
+
+    // Clearing `restarting` claims this attempt, so only one processor makes it.
+    const ready = restarting and attempts != 3 and root.ticks.load(.monotonic) >= due;
+
+    if (ready) {
+
+        attempts += 1;
+        restarting = false;
+
+    }
+
+    lock.release();
+
+    if (!ready) return;
 
     start() catch {
 
-        due = root.ticks +| 100;
+        lock.acquire();
+        restarting = true;
+        due = root.ticks.load(.monotonic) +| 100;
+        lock.release();
         root.log.line("supervisor recovery failed");
 
     };
 
 }
 
-pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
+/// Starts `image` for `owner`, lending it `identity` when given.
+pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64, identity: ?abi.Identity) !*process.Process {
 
     const bytes = switch (image) {
 
@@ -107,25 +150,10 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
 
     };
 
-    // AHCI: mass storage, SATA, AHCI 1.0; ABAR is BAR 5.
-    if (image == .storage and controller == null) controller = if (pci.find(.{ .class = 0x010601 })) |at| pci.bar(at, 5) else null;
-    if (image == .storage and controller == null) return error.NoDevice;
+    try probe(image);
 
-    if (image == .display and !probed) {
-
-        probed = true;
-        adapter = svga() orelse intel();
-
-    }
-
-    if (image == .display and root.framebuffer == null and adapter == null) return error.NoDevice;
-
-    // xHCI: serial bus, USB, xHCI; its registers are BAR 0.
-    if (image == .usb and host == null) host = if (pci.find(.{ .class = 0x0c0330 })) |at| pci.bar(at, 0) else null;
-    if (image == .usb and host == null) return error.NoDevice;
-
-    const task = try root.spawn(bytes, argument, root.quietest());
-    errdefer task.state = .dead;
+    const task = try root.spawn(bytes, argument, schedule.quietest());
+    errdefer root.kill(task, true);
 
     task.owner = owner.id;
     task.image = image;
@@ -295,22 +323,52 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
     try task.grant(.send, owner.id, 1);
     if (image == .serial) try task.grant(.port, 0x2f8, 8);
     try owner.grant(.send, task.id, 1);
+    if (identity) |value| task.identity = value;
+    schedule.start(task);
 
-    return task.id;
+    return task;
+
+}
+
+/// Finds the device `image` drives, the first time it starts; fails when there is none.
+fn probe(image: abi.Image) !void {
+
+    lock.acquire();
+    defer lock.release();
+
+    // AHCI: mass storage, SATA, AHCI 1.0; ABAR is BAR 5.
+    if (image == .storage and controller == null) controller = if (pci.find(.{ .class = 0x010601 })) |at| pci.bar(at, 5) else null;
+    if (image == .storage and controller == null) return error.NoDevice;
+
+    if (image == .display and !probed) {
+
+        probed = true;
+        adapter = svga() orelse intel();
+
+    }
+
+    if (image == .display and root.framebuffer == null and adapter == null) return error.NoDevice;
+
+    // xHCI: serial bus, USB, xHCI; its registers are BAR 0.
+    if (image == .usb and host == null) host = if (pci.find(.{ .class = 0x0c0330 })) |at| pci.bar(at, 0) else null;
+    if (image == .usb and host == null) return error.NoDevice;
 
 }
 
 fn listen(task: *process.Process, irq: u4) !void {
 
+    lock.acquire();
+    defer lock.release();
+
     try machine.route(irq, task.home);
-    listeners[irq] = task.id;
+    @atomicStore(u64, &listeners[irq], task.id, .release);
 
 }
 
 /// Hands ISA interrupt `irq` to its listener, if that process still runs.
 pub fn interrupt(irq: u4) void {
 
-    const task = ipc.find(root.processes, listeners[irq]) orelse return;
+    const task = root.processes.find(@atomicLoad(u64, &listeners[irq], .acquire)) orelse return;
 
     ipc.signal(task, @as(u64, 1) << irq);
 
@@ -355,9 +413,12 @@ fn intel() ?Graphics {
 
 pub fn inspect(owner: *process.Process, image: abi.Image) ?*process.Process {
 
-    var current = root.processes;
+    root.processes.lock.acquire();
+    defer root.processes.lock.release();
 
-    while (current) |task| : (current = task.next) {
+    var tasks = root.processes.iterate();
+
+    while (tasks.next()) |task| {
 
         if (task.owner == owner.id and task.image == image and task.state != .dead) return task;
 
@@ -369,36 +430,21 @@ pub fn inspect(owner: *process.Process, image: abi.Image) ?*process.Process {
 
 pub fn connect(owner: *process.Process, source: u64, destination: u64) !void {
 
-    const sender = ipc.find(root.processes, source) orelse return error.NoProcess;
-    const receiver = ipc.find(root.processes, destination) orelse return error.NoProcess;
+    const sender = root.processes.find(source) orelse return error.NoProcess;
+    const receiver = root.processes.find(destination) orelse return error.NoProcess;
 
     if (sender.owner != owner.id or receiver.owner != owner.id) return error.Denied;
-    if (!sender.permits(.send, destination, 1)) try sender.grant(.send, destination, 1);
+    try sender.allow(.send, destination, 1);
 
 }
 
 pub fn revoke(id: u64) void {
 
-    var current = root.processes;
+    root.processes.lock.acquire();
+    defer root.processes.lock.release();
 
-    while (current) |task| : (current = task.next) {
+    var tasks = root.processes.iterate();
 
-        var link = &task.capabilities;
-
-        while (link.*) |grant| {
-
-            if (grant.right != .send or grant.base != id or grant.size != 1) {
-
-                link = &grant.next;
-                continue;
-
-            }
-
-            link.* = grant.next;
-            root.frames.release(@intFromPtr(grant)) catch @panic("Capability ownership");
-
-        }
-
-    }
+    while (tasks.next()) |task| task.withdraw(id);
 
 }

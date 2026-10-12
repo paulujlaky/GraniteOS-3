@@ -7,16 +7,17 @@ const ipc = @import("ipc.zig");
 const abi = @import("abi.zig");
 const service = @import("service.zig");
 const shared = @import("shared.zig");
+const schedule = @import("schedule.zig");
 const firmware = @import("../boot/uefi/variable.zig");
 
 const paging = arch.paging;
 const CallError = paging.MapError || ipc.IpcError || shared.SharedError || @import("elf.zig").LoadError || error{ Denied, Invalid, Busy, ProcessIdsExhausted, InvalidProcessor, NoDevice };
 
-pub fn handle(task: *process.Process, ticks: u64) void {
+pub fn handle(task: *process.Process, ticks: u64) schedule.Outcome {
 
     var request = task.context.request();
 
-    invoke(task, ticks, &request) catch |err| {
+    const outcome = invoke(task, ticks, &request) catch |err| failed: {
 
         request.number = switch (err) {
 
@@ -29,14 +30,19 @@ pub fn handle(task: *process.Process, ticks: u64) void {
 
         };
 
+        break :failed .keep;
+
     };
 
-    task.context.respond(request);
+    // A blocked caller's result comes from whichever processor wakes it, which may already have written it.
+    if (outcome != .block) task.context.respond(request);
+
+    return outcome;
 
 }
 
 // Kept out of line, so a failure address names the system call rather than the dispatcher.
-noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) CallError!void {
+noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) CallError!schedule.Outcome {
 
     const number = frame.number;
 
@@ -44,14 +50,17 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
 
     switch (@as(abi.Call, @enumFromInt(number))) {
 
-        .yield => {
+        .yield => return .yield,
+        .exit => {
+
+            root.exited(task, frame.first);
+            return .exit;
 
         },
-        .exit => root.exited(task, frame.first),
         .send => {
 
             task.length = 0;
-            try ipc.send(root.processes, task, frame.first, frame.second);
+            if (try ipc.send(&root.processes, task, frame.first, frame.second)) return .block;
 
         },
         .receive => {
@@ -61,9 +70,9 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
 
             if (frame.first == 1) {
 
-                if (!ipc.poll(root.processes, task)) return error.NoProcess;
+                if (!ipc.poll(task)) return error.NoProcess;
 
-            } else ipc.receive(root.processes, task);
+            } else if (ipc.receive(task)) return .block;
 
             frame.* = task.context.request();
             frame.number = 0;
@@ -77,7 +86,7 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
             var bytes: [256]u8 = undefined;
 
             try copyUser(task, frame.first, bytes[0..frame.second], false);
-            root.log.output(bytes[0..frame.second]);
+            root.log.write(bytes[0..frame.second]);
 
         },
         .allocate => {
@@ -188,9 +197,12 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
 
             }
 
-            var current = root.processes;
+            root.processes.lock.acquire();
+            defer root.processes.lock.release();
 
-            while (current) |entry| : (current = entry.next) {
+            var entries = root.processes.iterate();
+
+            while (entries.next()) |entry| {
 
                 if (entry.state == .dead) continue;
                 summary.processes += 1;
@@ -198,8 +210,6 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
 
                 var record = entry.usage();
 
-                // Dispatch marks the caller ready only while it handles this call.
-                if (entry == task) record.state = .running;
                 try copyUser(task, frame.second + summary.records * @sizeOf(abi.Usage), std.mem.asBytes(&record), true);
                 summary.records += 1;
 
@@ -212,46 +222,39 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
         .owner => frame.first = task.owner,
         .call => {
 
-            if (frame.third == 0 or frame.third > 6000 or ticks > ~@as(u64, 0) - frame.third) return error.Invalid;
+            if (frame.third == 0 or frame.third > schedule.longest or ticks > ~@as(u64, 0) - frame.third) return error.Invalid;
             if (frame.fifth != 0 and (frame.fourth < paging.user_base or frame.fourth >= paging.user_end or frame.fifth > paging.user_end - frame.fourth)) return error.Invalid;
             const destination = if (frame.first == 0) try service.endpoint(task.owner) else frame.first;
 
             task.buffer = frame.fourth;
             task.length = frame.fifth;
-            try ipc.call(root.processes, task, destination, frame.second, ticks + frame.third);
+            try ipc.call(&root.processes, task, destination, frame.second, ticks + frame.third);
+
+            return .block;
 
         },
         .reply => {
 
             if (!task.policy.permits(.ipc)) return error.Denied;
-            try ipc.reply(root.processes, task, frame.first, frame.second, frame.third);
+            try ipc.reply(&root.processes, task, frame.first, frame.second, frame.third);
 
         },
         .sleep => {
 
             if (!task.policy.permits(.time)) return error.Denied;
-            if (frame.first == 0 or frame.first > 6000 or ticks > ~@as(u64, 0) - frame.first) return error.Invalid;
-            task.deadline = ticks + frame.first;
-            task.state = .sleeping;
+            if (frame.first == 0 or frame.first > schedule.longest or ticks > ~@as(u64, 0) - frame.first) return error.Invalid;
+            ipc.sleep(task, ticks + frame.first);
+
+            return .block;
 
         },
         .spawn => {
 
             if (!task.permits(.manage, 0, 1)) return error.Denied;
             const image = std.enums.fromInt(abi.Image, frame.first) orelse return error.Invalid;
-            const requester = if (frame.third == 0) null else ipc.find(root.processes, frame.third) orelse return error.NoProcess;
+            const identity = if (frame.third == 0) null else try lent(task, frame.third, frame.fourth, image);
 
-            // Only a signed-in application blocked on the caller lends its identity, and only to another application.
-            if (requester) |client| {
-
-                if (client.state != .replying or client.destination != task.id or client.ticket != frame.fourth) return error.Denied;
-                if (client.policy.layer != .application or client.identity.user == abi.nobody.user or client.identity.user == abi.system.user) return error.Denied;
-                if (!image.application()) return error.Invalid;
-
-            }
-
-            frame.first = try service.spawn(task, image, frame.second);
-            if (requester) |client| ipc.find(root.processes, frame.first).?.identity = client.identity;
+            frame.first = (try service.spawn(task, image, frame.second, identity)).id;
 
         },
         .inspect => {
@@ -264,11 +267,11 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
                 const child = service.inspect(task, image) orelse return error.NoProcess;
                 frame.first = child.id;
                 frame.second = child.generation;
-                return;
+                return .keep;
 
             }
 
-            const child = ipc.find(root.processes, frame.first) orelse return error.NoProcess;
+            const child = root.processes.find(frame.first) orelse return error.NoProcess;
             if (child.owner != task.id) return error.Denied;
             frame.first = child.id;
 
@@ -282,9 +285,9 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
         .stop => {
 
             if (!task.permits(.manage, 0, 1)) return error.Denied;
-            const child = ipc.find(root.processes, frame.first) orelse return error.NoProcess;
+            const child = root.processes.find(frame.first) orelse return error.NoProcess;
             if (child.owner != task.id) return error.Denied;
-            if (child.state == .running) child.doomed = true else child.state = .dead;
+            root.kill(child, false);
 
         },
         .dma => {
@@ -302,9 +305,9 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
         .fetch, .store => {
 
             if (!task.policy.permits(.ipc)) return error.Denied;
-            const client = ipc.find(root.processes, frame.first) orelse return error.NoProcess;
+            const client = try ipc.caller(&root.processes, task, frame.first, frame.second);
+            defer task.lock.release();
 
-            if (client.state != .replying or client.destination != task.id or client.ticket != frame.second) return error.Denied;
             if (frame.fifth > 0x10000 or frame.third > client.length or frame.fifth > client.length - frame.third) return error.Invalid;
 
             const remote = client.buffer + frame.third;
@@ -315,11 +318,12 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
         .assign => {
 
             if (!task.policy.permits(.accounts)) return error.Denied;
-            const client = ipc.find(root.processes, frame.first) orelse return error.NoProcess;
             const identity: abi.Identity = @bitCast(frame.third);
 
             // Only a caller blocked on this service can be re-identified, and never as a service.
-            if (client.state != .replying or client.destination != task.id or client.ticket != frame.second) return error.Denied;
+            const client = try ipc.caller(&root.processes, task, frame.first, frame.second);
+            defer task.lock.release();
+
             if (client.policy.layer != .application or identity.user == abi.system.user or identity.reserved != 0) return error.Invalid;
             client.identity = identity;
 
@@ -370,12 +374,27 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
         .alive => {
 
             if (!task.policy.permits(.ipc)) return error.Denied;
-            _ = ipc.find(root.processes, frame.first) orelse return error.NoProcess;
+            _ = root.processes.find(frame.first) orelse return error.NoProcess;
 
         },
         else => return error.Invalid,
 
     }
+
+    return .keep;
+
+}
+
+fn lent(server: *process.Process, id: u64, ticket: u64, image: abi.Image) CallError!abi.Identity {
+
+    // Only a signed-in application blocked on the caller lends its identity, and only to another application.
+    const client = try ipc.caller(&root.processes, server, id, ticket);
+    defer server.lock.release();
+
+    if (client.policy.layer != .application or client.identity.user == abi.nobody.user or client.identity.user == abi.system.user) return error.Denied;
+    if (!image.application()) return error.Invalid;
+
+    return client.identity;
 
 }
 

@@ -1,84 +1,132 @@
 const std = @import("std");
 
 const process = @import("process.zig");
+const schedule = @import("schedule.zig");
+const Lock = @import("lock.zig").Lock;
+const Table = @import("table.zig").Table;
 
 const Process = process.Process;
+const State = process.State;
 pub const IpcError = error{ PermissionDenied, NoProcess, Deadlock, Exhausted, InvalidReply };
-var sequence: u64 = 0;
+var sequence = std.atomic.Value(u64).init(0);
 
-pub fn find(head: ?*Process, id: u64) ?*Process {
+// Only a send that queues adds a wait that could close a cycle; ordering those lets each deadlock check see the others.
+var graph: Lock = .{};
 
-    var current = head;
+/// Hands `message` to `destination`; true when the sender waits for it to be received.
+pub fn send(table: *Table, sender: *Process, destination: u64, message: u64) IpcError!bool {
 
-    while (current) |entry| : (current = entry.next) {
-
-        if (entry.id == id and entry.state != .dead) return entry;
-
-    }
-
-    return null;
+    return transmit(table, sender, destination, message, false, 0);
 
 }
 
-pub fn send(head: ?*Process, sender: *Process, destination: u64, message: u64) IpcError!void {
+/// Sends `message` and waits for the reply, or until tick `deadline`.
+pub fn call(table: *Table, sender: *Process, destination: u64, message: u64, deadline: u64) IpcError!void {
 
-    try transmit(head, sender, destination, message, 0, 0);
-
-}
-
-pub fn call(head: ?*Process, sender: *Process, destination: u64, message: u64, deadline: u64) IpcError!void {
-
-    if (sequence == std.math.maxInt(u64)) return error.Exhausted;
-
-    try transmit(head, sender, destination, message, sequence + 1, deadline);
+    _ = try transmit(table, sender, destination, message, true, deadline);
 
 }
 
-fn transmit(head: ?*Process, sender: *Process, destination: u64, message: u64, ticket: u64, deadline: u64) IpcError!void {
+fn transmit(table: *Table, sender: *Process, destination: u64, message: u64, answer: bool, deadline: u64) IpcError!bool {
 
     if (!sender.permits(.send, destination, 1)) return error.PermissionDenied;
 
-    const receiver = find(head, destination) orelse return error.NoProcess;
+    const receiver = table.find(destination) orelse return error.NoProcess;
+
+    receiver.lock.acquire();
+
+    // A receiver blocked in `receive` waits on nobody, so handing it the message cannot close a cycle.
+    if (receiver.state == .receiving) {
+
+        defer receiver.lock.release();
+        return post(receiver, sender, message, answer, deadline);
+
+    }
+
+    receiver.lock.release();
+    graph.acquire();
+    defer graph.release();
+
     var cursor = receiver;
 
     while (true) {
 
         if (cursor == sender) return error.Deadlock;
-        if (cursor.state != .sending and cursor.state != .replying) break;
+        if (!waiting(cursor)) break;
 
-        cursor = find(head, cursor.destination) orelse break;
+        cursor = @atomicLoad(?*Process, &cursor.server, .monotonic) orelse break;
 
     }
 
-    if (sequence == std.math.maxInt(u64)) return error.Exhausted;
+    receiver.lock.acquire();
+    defer receiver.lock.release();
 
-    sequence += 1;
-    sender.sequence = sequence;
-    sender.destination = destination;
+    return post(receiver, sender, message, answer, deadline);
+
+}
+
+/// Delivers to `receiver` if it is receiving, or else queues the sender behind earlier ones; the caller holds `receiver`'s lock.
+fn post(receiver: *Process, sender: *Process, message: u64, answer: bool, deadline: u64) IpcError!bool {
+
+    if (receiver.state == .dead) return error.NoProcess;
+    if (answer and sequence.load(.monotonic) == std.math.maxInt(u64)) return error.Exhausted;
+
     sender.message = message;
-    sender.ticket = ticket;
+    sender.ticket = if (answer) sequence.fetchAdd(1, .monotonic) + 1 else 0;
     sender.deadline = deadline;
 
-    if (receiver.state == .receiving) {
+    if (receiver.state != .receiving) {
 
-        deliver(receiver, sender);
-        if (ticket != 0) sender.state = .replying;
-
-        return;
+        wait(receiver, sender, .sending);
+        return true;
 
     }
 
-    sender.state = .sending;
+    deliver(receiver, sender);
+    schedule.wake(receiver);
+    if (answer) wait(receiver, sender, .replying);
+
+    return answer;
 
 }
 
-pub fn receive(head: ?*Process, receiver: *Process) void {
+/// Leaves `client` waiting on `server` in `state`, with its alarm set when it has a deadline.
+fn wait(server: *Process, client: *Process, state: State) void {
 
-    if (!poll(head, receiver)) receiver.state = .receiving;
+    client.server = server;
+    (if (state == .sending) &server.pending else &server.serving).append(&client.link);
+
+    // The deadlock check reads this without a lock, so it must not see the state before the server.
+    @atomicStore(State, &client.state, state, .release);
+    if (client.deadline != 0) schedule.arm(client);
 
 }
 
-pub fn poll(head: ?*Process, receiver: *Process) bool {
+/// Takes the oldest message waiting for the running `receiver`; false when there is none.
+pub fn poll(receiver: *Process) bool {
+
+    receiver.lock.acquire();
+    defer receiver.lock.release();
+
+    return take(receiver);
+
+}
+
+/// Takes the oldest message waiting for the running `receiver`, or else blocks it until one arrives; true when it blocked.
+pub fn receive(receiver: *Process) bool {
+
+    receiver.lock.acquire();
+    defer receiver.lock.release();
+
+    if (take(receiver)) return false;
+
+    receiver.state = .receiving;
+
+    return true;
+
+}
+
+fn take(receiver: *Process) bool {
 
     if (receiver.signals != 0) {
 
@@ -87,53 +135,52 @@ pub fn poll(head: ?*Process, receiver: *Process) bool {
 
     }
 
-    var first: ?*Process = null;
-    var current = head;
+    const node = receiver.pending.popFirst() orelse return false;
+    const sender = Process.from("link", node);
 
-    while (current) |sender| : (current = sender.next) {
+    deliver(receiver, sender);
 
-        if (sender.state != .sending or sender.destination != receiver.id) continue;
-        if (first == null or sender.sequence < first.?.sequence) first = sender;
+    if (sender.ticket != 0) {
 
-    }
+        sender.state = .replying;
+        receiver.serving.append(&sender.link);
 
-    if (first) |sender| {
+    } else {
 
-        deliver(receiver, sender);
-
-        if (sender.ticket != 0) {
-
-            sender.state = .replying;
-
-        } else {
-
-            complete(sender, 0, 0);
-
-        }
-
-        return true;
+        complete(sender, 0, 0);
 
     }
 
-    return false;
+    return true;
 
 }
 
-pub fn reply(head: ?*Process, server: *Process, client: u64, ticket: u64, message: u64) IpcError!void {
+pub fn reply(table: *Table, server: *Process, client: u64, ticket: u64, message: u64) IpcError!void {
 
-    const sender = find(head, client) orelse return error.NoProcess;
+    const sender = caller(table, server, client, ticket) catch |err| return if (err == error.NoProcess) err else error.InvalidReply;
+    defer server.lock.release();
 
-    if (sender.state != .replying or sender.destination != server.id or ticket == 0 or sender.ticket != ticket) return error.InvalidReply;
-
+    server.serving.remove(&sender.link);
     complete(sender, 0, message);
+
+}
+
+/// The client `id` awaiting `server`'s reply to `ticket`, returned with `server`'s lock held so it keeps waiting.
+pub fn caller(table: *Table, server: *Process, id: u64, ticket: u64) IpcError!*Process {
+
+    const client = table.find(id) orelse return error.NoProcess;
+
+    server.lock.acquire();
+    if (client.state == .replying and client.server == server and ticket != 0 and client.ticket == ticket) return client;
+    server.lock.release();
+
+    return error.PermissionDenied;
 
 }
 
 fn complete(sender: *Process, status: u64, message: u64) void {
 
-    sender.state = .ready;
     sender.ticket = 0;
-    sender.deadline = 0;
 
     sender.context.respond(.{
 
@@ -142,41 +189,111 @@ fn complete(sender: *Process, status: u64, message: u64) void {
 
     });
 
+    schedule.wake(sender);
+
 }
 
-pub fn expire(head: ?*Process, ticks: u64) void {
+/// Blocks the running `task` until tick `deadline`.
+pub fn sleep(task: *Process, deadline: u64) void {
 
-    var current = head;
+    task.lock.acquire();
+    defer task.lock.release();
 
-    while (current) |task| : (current = task.next) {
+    task.deadline = deadline;
+    task.state = .sleeping;
+    schedule.arm(task);
 
-        if (task.deadline == 0 or ticks < task.deadline) continue;
-        if (task.state == .sleeping) complete(task, 0, 0);
-        if (task.state == .replying or (task.state == .sending and task.ticket != 0)) complete(task, 6, 0);
+}
+
+/// Ends every wait on processor `id` whose deadline passed by tick `now`.
+pub fn expire(id: u32, now: u64) void {
+
+    while (schedule.due(id, now)) |alarm| {
+
+        const task = alarm.task;
+        const holder = guard(task);
+
+        defer holder.lock.release();
+
+        // A wait that ended as its alarm went off may already have given way to another.
+        if (task.deadline != alarm.deadline) continue;
+
+        if (task.state == .sleeping) {
+
+            complete(task, 0, 0);
+
+        } else if (holder != task) {
+
+            leave(holder, task);
+            complete(task, 6, 0);
+
+        }
 
     }
 
 }
 
-pub fn cancel(head: ?*Process, id: u64) void {
+/// Fails every call and send still waiting on `server`, which has ended.
+pub fn cancel(server: *Process) void {
 
-    var current = head;
+    server.lock.acquire();
+    defer server.lock.release();
 
-    while (current) |sender| : (current = sender.next) {
+    for ([_]*std.DoublyLinkedList{ &server.pending, &server.serving }) |queue| {
 
-        if ((sender.state != .sending and sender.state != .replying) or sender.destination != id) continue;
-
-        complete(sender, 3, 0);
+        while (queue.popFirst()) |node| complete(Process.from("link", node), 3, 0);
 
     }
+
+}
+
+/// Takes `client` out of the queue it waits in on `server`; the caller holds `server`'s lock.
+pub fn leave(server: *Process, client: *Process) void {
+
+    (if (client.state == .sending) &server.pending else &server.serving).remove(&client.link);
+
+}
+
+/// Locks and returns the process guarding `task`'s state: the server it waits on, or else itself.
+pub fn guard(task: *Process) *Process {
+
+    while (true) {
+
+        const holder = warden(task);
+
+        holder.lock.acquire();
+        if (warden(task) == holder) return holder;
+        holder.lock.release();
+
+    }
+
+}
+
+fn warden(task: *Process) *Process {
+
+    return if (waiting(task)) @atomicLoad(?*Process, &task.server, .monotonic).? else task;
+
+}
+
+fn waiting(task: *Process) bool {
+
+    const state = @atomicLoad(State, &task.state, .acquire);
+
+    return state == .sending or state == .replying;
 
 }
 
 /// Records interrupts `bits` for `task`; it receives them as one message from process 0.
 pub fn signal(task: *Process, bits: u64) void {
 
+    task.lock.acquire();
+    defer task.lock.release();
+
     task.signals |= bits;
-    if (task.state == .receiving) notify(task);
+    if (task.state != .receiving) return;
+
+    notify(task);
+    schedule.wake(task);
 
 }
 
@@ -190,7 +307,6 @@ fn notify(receiver: *Process) void {
     });
 
     receiver.signals = 0;
-    receiver.state = .ready;
 
 }
 
@@ -206,7 +322,5 @@ fn deliver(receiver: *Process, sender: *const Process) void {
         .fifth = @bitCast(sender.identity),
 
     });
-
-    receiver.state = .ready;
 
 }

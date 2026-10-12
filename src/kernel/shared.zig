@@ -1,7 +1,7 @@
 const arch = @import("../arch/root.zig");
 const root = @import("root.zig");
 const process = @import("process.zig");
-const ipc = @import("ipc.zig");
+const Lock = @import("lock.zig").Lock;
 
 const paging = arch.paging;
 pub const SharedError = error{ Denied, Invalid, Exhausted, NoProcess };
@@ -44,6 +44,9 @@ pub const Mapping = struct {
 
 };
 
+// Guards the regions, their holders, and handle numbers.
+var lock: Lock = .{};
+
 var regions: ?*Region = null;
 var handles: u64 = 0;
 
@@ -53,11 +56,9 @@ pub fn create(task: *process.Process, pages: u64) !Mapping {
 
     const region: *Region = @ptrFromInt(try root.frames.alloc());
 
-    handles += 1;
-
     region.* = .{
 
-        .handle = handles,
+        .handle = 0,
 
     };
 
@@ -75,8 +76,14 @@ pub fn create(task: *process.Process, pages: u64) !Mapping {
 
     }
 
+    // Nothing else reaches the region until it is listed, so only listing it takes the lock.
     const address = try map(task, region);
 
+    lock.acquire();
+    defer lock.release();
+
+    handles += 1;
+    region.handle = handles;
     region.next = regions;
     regions = region;
 
@@ -87,15 +94,21 @@ pub fn create(task: *process.Process, pages: u64) !Mapping {
 /// Lets process `target` attach the region; only a current holder may lend it.
 pub fn lend(task: *process.Process, handle: u64, target: u64) !void {
 
+    lock.acquire();
+    defer lock.release();
+
     const region = try find(handle);
     if (holder(region, task.id) == null) return error.Denied;
 
-    const borrower = ipc.find(root.processes, target) orelse return error.NoProcess;
-    if (!borrower.permits(.region, handle, 1)) try borrower.grant(.region, handle, 1);
+    const borrower = root.processes.find(target) orelse return error.NoProcess;
+    try borrower.allow(.region, handle, 1);
 
 }
 
 pub fn attach(task: *process.Process, handle: u64) !Mapping {
+
+    lock.acquire();
+    defer lock.release();
 
     const region = try find(handle);
 
@@ -107,6 +120,9 @@ pub fn attach(task: *process.Process, handle: u64) !Mapping {
 }
 
 pub fn detach(task: *process.Process, handle: u64) !void {
+
+    lock.acquire();
+    defer lock.release();
 
     const region = try find(handle);
     const slot = holder(region, task.id) orelse return error.Denied;
@@ -123,6 +139,9 @@ pub fn detach(task: *process.Process, handle: u64) !void {
 
 /// Drops every hold of a reaped process.
 pub fn departed(id: u64) void {
+
+    lock.acquire();
+    defer lock.release();
 
     var current = regions;
 

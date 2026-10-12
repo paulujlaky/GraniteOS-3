@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const boot = @import("../boot/info.zig");
+const Lock = @import("lock.zig").Lock;
 
 pub const page_size = 4096;
 pub const physical_limit = 0x8000000000;
@@ -15,6 +16,8 @@ pub const Frames = struct {
 
     /// Pages the allocator manages, free or not.
     total: usize = 0,
+
+    lock: Lock = .{},
 
     pub fn storageSize(regions: []const boot.Region) MemoryError!usize {
 
@@ -83,6 +86,9 @@ pub const Frames = struct {
 
     pub fn alloc(self: *Frames) MemoryError!usize {
 
+        self.lock.acquire();
+        defer self.lock.release();
+
         if (self.free_count == 0) return error.OutOfMemory;
 
         var scanned: usize = 0;
@@ -113,6 +119,9 @@ pub const Frames = struct {
 
         if (address % page_size != 0 or address / page_size >= self.count) return error.InvalidFrame;
 
+        self.lock.acquire();
+        defer self.lock.release();
+
         const index = address / page_size;
 
         if (self.state(index) == 1) return error.DoubleFree;
@@ -125,6 +134,9 @@ pub const Frames = struct {
     }
 
     pub fn allocRun(self: *Frames, pages: usize) MemoryError!usize {
+
+        self.lock.acquire();
+        defer self.lock.release();
 
         if (pages == 0 or pages > self.free_count) return error.OutOfMemory;
 

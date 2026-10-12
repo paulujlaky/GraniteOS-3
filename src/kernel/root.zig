@@ -8,27 +8,35 @@ const ipc = @import("ipc.zig");
 const check = @import("check.zig");
 const service = @import("service.zig");
 const shared = @import("shared.zig");
-const Log = @import("../debug/log.zig").Log;
+const schedule = @import("schedule.zig");
+const debug = @import("../debug/log.zig");
+const Lock = @import("lock.zig").Lock;
+const Table = @import("table.zig").Table;
+const Log = debug.Log;
 
 const options = @import("options");
 
 const machine = arch.machine;
+const List = std.DoublyLinkedList;
 pub var frames: memory.Frames = undefined;
-pub var processes: ?*process.Process = null;
+pub var processes: Table = .{};
 pub var log: Log = undefined;
-pub var lock = std.atomic.Value(bool).init(false);
 var launched = std.atomic.Value(bool).init(false);
 pub var failed = std.atomic.Value(bool).init(false);
 var initialized = false;
-var next_id: u64 = 1;
 pub var framebuffer: ?boot.Framebuffer = null;
 pub var primary: u32 = 0;
-pub var ticks: u64 = 0;
+pub var ticks = std.atomic.Value(u64).init(0);
 pub var runtime: u64 = 0;
 pub var efi: ?boot.Region = null;
 
 /// Local time in seconds since 1970 when the loader read the firmware clock; `ticks` counts on from there.
 pub var epoch: u64 = 0;
+
+// Each processor records this count on entering the kernel, so a process retired since is freed only once all have left.
+var retirements = std.atomic.Value(u64).init(1);
+var retired: List = .{};
+var retired_lock: Lock = .{};
 
 pub fn start(info: *const boot.Info, output: Log) !noreturn {
 
@@ -63,6 +71,7 @@ pub fn start(info: *const boot.Info, output: Log) !noreturn {
     try machine.prepare(info, &frames, log);
     initialized = true;
     primary = machine.local().id;
+    try arrange();
     log.line("memory protected");
 
     if (options.self_test) try check.start(info);
@@ -82,9 +91,32 @@ pub fn start(info: *const boot.Info, output: Log) !noreturn {
 
 }
 
-pub fn spawn(bytes: []const u8, argument: usize, home: u32) !*process.Process {
+/// Sizes the process table and gives every processor its alarms.
+fn arrange() !void {
 
-    if (next_id == std.math.maxInt(u64)) return error.ProcessIdsExhausted;
+    // Each process takes well over 16 pages, so there are never more processes than buckets.
+    processes.buckets = try zeroed(?*process.Process, @max(frames.total / 16, 1));
+
+    var cores = machine.cores;
+
+    while (cores) |core| : (cores = core.next) schedule.prepare(core.id, try zeroed(List, schedule.slots));
+
+}
+
+/// Room for `count` zeroed values, in pages of their own.
+fn zeroed(comptime T: type, count: usize) ![]T {
+
+    const size = std.mem.alignForward(usize, count * @sizeOf(T), 4096);
+    const base = try frames.allocRun(size / 4096);
+
+    @memset(@as([*]u8, @ptrFromInt(base))[0..size], 0);
+
+    return @as([*]T, @ptrFromInt(base))[0..count];
+
+}
+
+/// Creates a process homed on processor `home`, held until `schedule.start` queues it.
+pub fn spawn(bytes: []const u8, argument: usize, home: u32) !*process.Process {
 
     var cores = machine.cores;
 
@@ -94,44 +126,13 @@ pub fn spawn(bytes: []const u8, argument: usize, home: u32) !*process.Process {
 
     } else return error.InvalidProcessor;
 
-    const task = try process.Process.create(machine.kernel, bytes, next_id, argument, home);
+    const task = try process.Process.create(machine.kernel, bytes, 0, argument, home);
+    errdefer task.destroy();
 
-    next_id += 1;
-    task.next = processes;
-    processes = task;
+    try processes.insert(task);
+    _ = schedule.processors[home].homed.fetchAdd(1, .monotonic);
 
     return task;
-
-}
-
-/// The processor with the fewest live processes homed on it, so new ones spread across them.
-pub fn quietest() u32 {
-
-    var best = primary;
-    var least: usize = std.math.maxInt(usize);
-    var cores = machine.cores;
-
-    while (cores) |core| : (cores = core.next) {
-
-        var count: usize = 0;
-        var current = processes;
-
-        while (current) |task| : (current = task.next) {
-
-            if (task.home == core.id and task.state != .dead) count += 1;
-
-        }
-
-        if (count < least) {
-
-            least = count;
-            best = core.id;
-
-        }
-
-    }
-
-    return best;
 
 }
 
@@ -174,32 +175,102 @@ pub fn exited(task: *process.Process, status: u64) void {
     log.decimal("exited process", task.id);
     log.decimal("exit status", status);
 
+}
+
+/// Ends `task`, which the caller holds when `holder` is set; another processor holding it ends it on letting go instead.
+pub fn kill(task: *process.Process, holder: bool) void {
+
+    const guard = ipc.guard(task);
+
+    if (task.state == .dead or !schedule.claim(task, holder)) {
+
+        guard.lock.release();
+        return;
+
+    }
+
+    if (guard != task) ipc.leave(guard, task);
     task.state = .dead;
+    guard.lock.release();
+
+    ipc.cancel(task);
+    service.revoke(task.id);
+    service.departed(task.id);
+    shared.departed(task.id);
+    retire(task);
 
 }
 
-pub fn reap() void {
+/// Takes `task` out of the table, to be freed once no processor can still hold a pointer to it.
+fn retire(task: *process.Process) void {
 
-    var link = &processes;
+    retired_lock.acquire();
+    defer retired_lock.release();
 
-    while (link.*) |task| {
+    processes.remove(task);
+    task.retired = retirements.fetchAdd(1, .seq_cst);
+    retired.append(&task.link);
 
-        if (task.state != .dead) {
+}
 
-            link = &task.next;
+/// Frees retired processes once no processor can still hold a pointer to them.
+pub fn collect() void {
 
-            continue;
+    if (@atomicLoad(?*List.Node, &retired.first, .monotonic) == null) return;
 
-        }
+    retired_lock.acquire();
+    defer retired_lock.release();
 
-        ipc.cancel(processes, task.id);
-        service.revoke(task.id);
-        service.departed(task.id);
-        shared.departed(task.id);
-        link.* = task.next;
+    while (retired.first) |node| {
+
+        const task = process.Process.from("link", node);
+
+        if (!passed(task.retired)) break;
+
+        retired.remove(node);
         task.destroy();
 
     }
+
+}
+
+/// Every processor left the kernel, or entered it again, after retirement `mark`.
+fn passed(mark: u64) bool {
+
+    var cores = machine.cores;
+
+    while (cores) |core| : (cores = core.next) {
+
+        const seen = core.seen.load(.seq_cst);
+
+        if (seen != 0 and seen <= mark) return false;
+
+    }
+
+    return true;
+
+}
+
+/// Records that `core` is in the kernel, where it may hold pointers to processes retired from now on.
+pub fn enter(core: *machine.Core) void {
+
+    core.seen.store(retirements.load(.seq_cst), .seq_cst);
+
+}
+
+pub fn leave(core: *machine.Core) void {
+
+    core.seen.store(0, .release);
+
+}
+
+/// No process is left, alive or awaiting release.
+pub fn settled() bool {
+
+    retired_lock.acquire();
+    defer retired_lock.release();
+
+    return @atomicLoad(usize, &processes.count, .monotonic) == 0 and retired.first == null;
 
 }
 
@@ -221,6 +292,7 @@ pub fn beginFailure() void {
     arch.cpu.disable();
     if (failed.swap(true, .acq_rel)) arch.cpu.halt();
     if (initialized) machine.apic.stopOthers();
+    debug.stopped = true;
 
 }
 

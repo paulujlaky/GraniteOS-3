@@ -10,6 +10,10 @@ const acpi = @import("../board/pc/acpi.zig");
 const permission = @import("permission.zig");
 const abi = @import("abi.zig");
 const paging = @import("../arch/root.zig").paging;
+const Table = @import("table.zig").Table;
+
+var buckets: [4]?*process.Process = undefined;
+var alarms: [schedule.slots]std.DoublyLinkedList = undefined;
 
 test "physical allocator protects firmware state and detects invalid frees" {
 
@@ -245,38 +249,51 @@ test "ELF rejects page overlaps and program table overflow" {
 
 }
 
+/// A service held by processor 0, as if running there.
 fn task(id: u64) process.Process {
 
-    var value: process.Process = undefined;
+    return .{
 
-    value.next = null;
-    value.id = id;
-    value.state = .ready;
-    value.capabilities = null;
-    value.home = 0;
-    value.ticket = 0;
-    value.deadline = 0;
-    value.length = 0;
-    value.signals = 0;
-    value.identity = abi.nobody;
+        .id = id,
+        .environment = undefined,
+        .space = undefined,
+        .context = .{
 
-    value.policy = .{
+        },
+        .home = 0,
 
-        .layer = .service,
-        .length = abi.permission_count,
-        .permissions = .{
+        .policy = .{
 
-            .ipc, .memory, .time, .ports, .mmio, .power, .diagnostics, .management, .dma, .accounts, .firmware
+            .layer = .service,
+            .length = abi.permission_count,
+            .permissions = .{
+
+                .ipc, .memory, .time, .ports, .mmio, .power, .diagnostics, .management, .dma, .accounts, .firmware
+
+            },
 
         },
 
     };
 
-    value.context = .{
+}
+
+/// A process table holding `tasks` in id order, on a freshly prepared processor 0.
+fn table(tasks: []const *process.Process) Table {
+
+    @memset(&buckets, null);
+    @memset(&alarms, .{});
+    schedule.prepare(0, &alarms);
+
+    var result = Table{
+
+        .buckets = &buckets,
 
     };
 
-    return value;
+    for (tasks) |entry| result.insert(entry) catch unreachable;
+
+    return result;
 
 }
 
@@ -364,32 +381,32 @@ test "RPC authenticates one-shot replies and cancels both phases on peer death" 
 
     };
 
-    client.next = &server;
-    server.next = &stranger;
+    var processes = table(&.{ &client, &server, &stranger });
+
     client.capabilities = &grant;
 
-    try ipc.call(&client, &client, 2, 41, 100);
+    try ipc.call(&processes, &client, 2, 41, 100);
     try std.testing.expectEqual(.sending, client.state);
-    try std.testing.expect(ipc.poll(&client, &server));
+    try std.testing.expect(ipc.poll(&server));
     const ticket = server.context.request().third;
 
     try std.testing.expectEqual(.replying, client.state);
-    try std.testing.expectError(error.InvalidReply, ipc.reply(&client, &stranger, 1, ticket, 42));
-    try std.testing.expectError(error.InvalidReply, ipc.reply(&client, &server, 1, ticket + 1, 42));
-    try ipc.reply(&client, &server, 1, ticket, 42);
+    try std.testing.expectError(error.InvalidReply, ipc.reply(&processes, &stranger, 1, ticket, 42));
+    try std.testing.expectError(error.InvalidReply, ipc.reply(&processes, &server, 1, ticket + 1, 42));
+    try ipc.reply(&processes, &server, 1, ticket, 42);
     try std.testing.expectEqual(42, client.context.request().first);
-    try std.testing.expectError(error.InvalidReply, ipc.reply(&client, &server, 1, ticket, 42));
+    try std.testing.expectError(error.InvalidReply, ipc.reply(&processes, &server, 1, ticket, 42));
 
-    ipc.receive(&client, &server);
-    try ipc.call(&client, &client, 2, 43, 100);
+    try std.testing.expect(ipc.receive(&server));
+    try ipc.call(&processes, &client, 2, 43, 100);
     try std.testing.expectEqual(.replying, client.state);
-    try std.testing.expectError(error.InvalidReply, ipc.reply(&client, &server, 1, ticket, 42));
-    ipc.cancel(&client, 2);
+    try std.testing.expectError(error.InvalidReply, ipc.reply(&processes, &server, 1, ticket, 42));
+    ipc.cancel(&server);
     try std.testing.expectEqual(.ready, client.state);
     try std.testing.expectEqual(3, client.context.request().number);
 
-    try ipc.call(&client, &client, 2, 44, 100);
-    ipc.cancel(&client, 2);
+    try ipc.call(&processes, &client, 2, 44, 100);
+    ipc.cancel(&server);
     try std.testing.expectEqual(.ready, client.state);
     try std.testing.expectEqual(3, client.context.request().number);
 
@@ -408,24 +425,25 @@ test "RPC deadlines release queued and delivered calls without reviving stale re
 
     };
 
-    client.next = &server;
+    var processes = table(&.{ &client, &server });
+
     client.capabilities = &grant;
     server.capabilities = &grant;
-    try ipc.call(&client, &client, 2, 1, 10);
-    ipc.expire(&client, 9);
+    try ipc.call(&processes, &client, 2, 1, 10);
+    ipc.expire(0, 9);
     try std.testing.expectEqual(.sending, client.state);
-    ipc.expire(&client, 10);
+    ipc.expire(0, 10);
     try std.testing.expectEqual(6, client.context.request().number);
-    try std.testing.expect(!ipc.poll(&client, &server));
+    try std.testing.expect(!ipc.poll(&server));
 
-    ipc.receive(&client, &server);
-    try ipc.call(&client, &client, 2, 1, 20);
+    try std.testing.expect(ipc.receive(&server));
+    try ipc.call(&processes, &client, 2, 1, 20);
     const ticket = server.context.request().third;
 
-    try std.testing.expectError(error.Deadlock, ipc.call(&client, &server, 1, 2, 20));
-    ipc.expire(&client, 20);
+    try std.testing.expectError(error.Deadlock, ipc.call(&processes, &server, 1, 2, 20));
+    ipc.expire(0, 20);
     try std.testing.expectEqual(6, client.context.request().number);
-    try std.testing.expectError(error.InvalidReply, ipc.reply(&client, &server, 1, ticket, 0));
+    try std.testing.expectError(error.InvalidReply, ipc.reply(&processes, &server, 1, ticket, 0));
 
 }
 
@@ -456,8 +474,7 @@ test "IPC rendezvous preserves sender identity and wakes blocked peers" {
 
     var sender = task(1);
     var receiver = task(2);
-
-    sender.next = &receiver;
+    var processes = table(&.{ &sender, &receiver });
 
     var grant = process.Capability{
 
@@ -476,25 +493,25 @@ test "IPC rendezvous preserves sender identity and wakes blocked peers" {
 
     };
 
-    try ipc.send(&sender, &sender, 2, 123);
+    try std.testing.expect(try ipc.send(&processes, &sender, 2, 123));
     try std.testing.expectEqual(.sending, sender.state);
-    ipc.receive(&sender, &receiver);
+    try std.testing.expect(!ipc.receive(&receiver));
     try std.testing.expectEqual(.ready, sender.state);
     try std.testing.expectEqual(1, receiver.context.request().first);
     try std.testing.expectEqual(123, receiver.context.request().second);
     try std.testing.expectEqual(sender.identity, @as(abi.Identity, @bitCast(receiver.context.request().fifth)));
-    ipc.receive(&sender, &receiver);
+    try std.testing.expect(ipc.receive(&receiver));
     try std.testing.expectEqual(.receiving, receiver.state);
-    try ipc.send(&sender, &sender, 2, 456);
+    try std.testing.expect(!try ipc.send(&processes, &sender, 2, 456));
     try std.testing.expectEqual(.ready, receiver.state);
     try std.testing.expectEqual(456, receiver.context.request().second);
-    try std.testing.expectError(error.PermissionDenied, ipc.send(&sender, &receiver, 1, 0));
-    try ipc.send(&sender, &sender, 2, 789);
+    try std.testing.expectError(error.PermissionDenied, ipc.send(&processes, &receiver, 1, 0));
+    try std.testing.expect(try ipc.send(&processes, &sender, 2, 789));
     receiver.state = .dead;
-    ipc.cancel(&sender, 2);
+    ipc.cancel(&receiver);
     try std.testing.expectEqual(.ready, sender.state);
     try std.testing.expectEqual(3, sender.context.request().number);
-    try std.testing.expectError(error.NoProcess, ipc.send(&sender, &sender, 2, 0));
+    try std.testing.expectError(error.NoProcess, ipc.send(&processes, &sender, 2, 0));
 
 }
 
@@ -503,9 +520,7 @@ test "IPC rejects wait cycles and serves senders in arrival order" {
     var first = task(1);
     var second = task(2);
     var receiver = task(3);
-
-    first.next = &second;
-    second.next = &receiver;
+    var processes = table(&.{ &first, &second, &receiver });
 
     var grant = process.Capability{
 
@@ -518,15 +533,15 @@ test "IPC rejects wait cycles and serves senders in arrival order" {
     first.capabilities = &grant;
     second.capabilities = &grant;
     receiver.capabilities = &grant;
-    try std.testing.expectError(error.Deadlock, ipc.send(&first, &first, 1, 0));
-    try ipc.send(&first, &first, 2, 1);
-    try std.testing.expectError(error.Deadlock, ipc.send(&first, &second, 1, 2));
-    ipc.receive(&first, &second);
-    try ipc.send(&first, &second, 3, 20);
-    try ipc.send(&first, &first, 3, 10);
-    ipc.receive(&first, &receiver);
+    try std.testing.expectError(error.Deadlock, ipc.send(&processes, &first, 1, 0));
+    _ = try ipc.send(&processes, &first, 2, 1);
+    try std.testing.expectError(error.Deadlock, ipc.send(&processes, &second, 1, 2));
+    _ = ipc.receive(&second);
+    _ = try ipc.send(&processes, &second, 3, 20);
+    _ = try ipc.send(&processes, &first, 3, 10);
+    _ = ipc.receive(&receiver);
     try std.testing.expectEqual(20, receiver.context.request().second);
-    ipc.receive(&first, &receiver);
+    _ = ipc.receive(&receiver);
     try std.testing.expectEqual(10, receiver.context.request().second);
 
 }
@@ -535,6 +550,7 @@ test "interrupts wake a receiving service and coalesce while it is busy" {
 
     var sender = task(1);
     var service = task(2);
+    var processes = table(&.{ &sender, &service });
 
     var grant = process.Capability{
 
@@ -544,10 +560,9 @@ test "interrupts wake a receiving service and coalesce while it is busy" {
 
     };
 
-    sender.next = &service;
     sender.capabilities = &grant;
 
-    ipc.receive(&sender, &service);
+    try std.testing.expect(ipc.receive(&service));
     ipc.signal(&service, 1 << 12);
     try std.testing.expectEqual(.ready, service.state);
     try std.testing.expectEqual(0, service.context.request().first);
@@ -555,35 +570,73 @@ test "interrupts wake a receiving service and coalesce while it is busy" {
 
     ipc.signal(&service, 1 << 1);
     ipc.signal(&service, 1 << 12);
-    try ipc.send(&sender, &sender, 2, 7);
-    try std.testing.expect(ipc.poll(&sender, &service));
+    _ = try ipc.send(&processes, &sender, 2, 7);
+    try std.testing.expect(ipc.poll(&service));
     try std.testing.expectEqual(1 << 1 | 1 << 12, service.context.request().second);
-    try std.testing.expect(ipc.poll(&sender, &service));
+    try std.testing.expect(ipc.poll(&service));
     try std.testing.expectEqual(1, service.context.request().first);
-    try std.testing.expect(!ipc.poll(&sender, &service));
+    try std.testing.expect(!ipc.poll(&service));
 
 }
 
-test "scheduler rotates its own ready processes first and takes over others only when idle" {
+test "scheduler runs its own ready processes in turn and takes over others only when idle" {
 
     var first = task(1);
     var second = task(2);
     var third = task(3);
 
-    first.next = &second;
-    second.next = &third;
-    try std.testing.expectEqual(&second, schedule.choose(&first, 0, 1).?);
-    try std.testing.expectEqual(&first, schedule.choose(&first, 0, 3).?);
-    first.state = .receiving;
-    second.home = 1;
-    try std.testing.expectEqual(&third, schedule.choose(&first, 0, 3).?);
-    try std.testing.expectEqual(2, schedule.waiting(&first));
-    third.state = .running;
-    try std.testing.expectEqual(&second, schedule.choose(&first, 0, 0).?);
-    try std.testing.expectEqual(&second, schedule.choose(&first, 1, 0).?);
-    second.state = .sleeping;
-    try std.testing.expectEqual(null, schedule.choose(&first, 0, 0));
-    try std.testing.expectEqual(0, schedule.waiting(&first));
+    _ = table(&.{});
+    schedule.prepare(1, alarms[0..0]);
+    third.home = 1;
+
+    schedule.start(&first);
+    schedule.start(&second);
+    schedule.start(&third);
+    try std.testing.expectEqual(&first, schedule.pick(0).?);
+    try std.testing.expectEqual(.yield, schedule.release(0, &first, .yield));
+    try std.testing.expectEqual(&second, schedule.pick(0).?);
+    second.state = .receiving;
+    try std.testing.expectEqual(.block, schedule.release(0, &second, .block));
+    try std.testing.expectEqual(2, schedule.waiting());
+    try std.testing.expectEqual(&first, schedule.pick(0).?);
+    try std.testing.expectEqual(&third, schedule.pick(0).?);
+    try std.testing.expectEqual(0, third.home);
+    try std.testing.expectEqual(null, schedule.pick(1));
+    schedule.wake(&second);
+    try std.testing.expectEqual(&second, schedule.pick(1).?);
+    try std.testing.expectEqual(0, schedule.waiting());
+
+}
+
+test "process table finds live processes by id along shared chains" {
+
+    var first = task(0);
+    var second = task(0);
+    var third = task(0);
+
+    @memset(&buckets, null);
+
+    var processes = Table{
+
+        .buckets = buckets[0..2],
+
+    };
+
+    try processes.insert(&first);
+    try processes.insert(&second);
+    try processes.insert(&third);
+    try std.testing.expectEqual(&third, processes.find(3).?);
+    processes.remove(&first);
+    try std.testing.expectEqual(null, processes.find(1));
+    try std.testing.expectEqual(&third, processes.find(3).?);
+    second.state = .dead;
+    try std.testing.expectEqual(null, processes.find(2));
+
+    var all = processes.iterate();
+
+    try std.testing.expectEqual(&third, all.next().?);
+    try std.testing.expectEqual(&second, all.next().?);
+    try std.testing.expectEqual(null, all.next());
 
 }
 

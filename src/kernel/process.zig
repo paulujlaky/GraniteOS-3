@@ -1,10 +1,14 @@
+const std = @import("std");
+
 const arch = @import("../arch/root.zig");
 const elf = @import("elf.zig");
 const memory = @import("memory.zig");
 const abi = @import("abi.zig");
 const permission = @import("permission.zig");
+const Lock = @import("lock.zig").Lock;
 
 const paging = arch.paging;
+const Node = std.DoublyLinkedList.Node;
 pub const State = abi.State;
 
 pub const Right = enum {
@@ -31,7 +35,6 @@ pub const Capability = struct {
 
 pub const Process = struct {
 
-    next: ?*Process = null,
     id: u64,
     state: State = .ready,
     policy: permission.Policy = permission.application,
@@ -42,8 +45,6 @@ pub const Process = struct {
     context: arch.context.Context,
 
     capabilities: ?*Capability = null,
-    destination: u64 = 0,
-    sequence: u64 = 0,
     message: u64 = 0,
     ticket: u64 = 0,
     deadline: u64 = 0,
@@ -57,11 +58,36 @@ pub const Process = struct {
     /// Device interrupts raised since the last `receive`, one bit per ISA line.
     signals: u64 = 0,
 
+    /// Guards its capabilities, signals, and callers, and its state unless it waits on a server, whose lock guards that instead.
+    lock: Lock = .{},
+
+    /// The server it sends to or awaits a reply from.
+    server: ?*Process = null,
+
+    /// Callers queued to be received, in arrival order, and those received but not yet answered.
+    pending: std.DoublyLinkedList = .{},
+    serving: std.DoublyLinkedList = .{},
+
+    /// Its place in a ready queue or a server's queue, and among its processor's alarms.
+    link: Node = .{},
+    alarm: Node = .{},
+    armed: bool = false,
+
+    /// Its places in the process table: its bucket's chain, and the list of every process.
+    chain: ?*Process = null,
+    roster: Node = .{},
+
     /// The processor it last ran on, which takes it first; an idle processor may take it over.
     home: u32,
 
-    /// Stopped while it ran on another processor; it dies when that processor next enters the kernel.
+    /// Its processor's current process, or a new one its creator has yet to start; only the holder queues or ends it.
+    held: bool = true,
+
+    /// Stopped while another processor held it; it dies when that processor lets go.
     doomed: bool = false,
+
+    /// The retirement count when it ended; its memory is freed once every processor has entered the kernel since.
+    retired: u64 = 0,
 
     /// Timer ticks that interrupted the process while it ran: its processor time at 100 Hz.
     preemptions: usize = 0,
@@ -130,7 +156,66 @@ pub const Process = struct {
 
     }
 
+    /// The process holding `node` as its `field`.
+    pub fn from(comptime field: []const u8, node: *Node) *Process {
+
+        return @alignCast(@fieldParentPtr(field, node));
+
+    }
+
     pub fn grant(self: *Process, right: Right, base: u64, size: u64) !void {
+
+        self.lock.acquire();
+        defer self.lock.release();
+
+        try self.add(right, base, size);
+
+    }
+
+    /// Grants `right` over the range unless the process already holds it.
+    pub fn allow(self: *Process, right: Right, base: u64, size: u64) !void {
+
+        self.lock.acquire();
+        defer self.lock.release();
+
+        if (!self.holds(right, base, size)) try self.add(right, base, size);
+
+    }
+
+    pub fn permits(self: *Process, right: Right, base: u64, size: u64) bool {
+
+        self.lock.acquire();
+        defer self.lock.release();
+
+        return self.holds(right, base, size);
+
+    }
+
+    /// Drops its rights to send to process `id`, which has ended.
+    pub fn withdraw(self: *Process, id: u64) void {
+
+        self.lock.acquire();
+        defer self.lock.release();
+
+        var link = &self.capabilities;
+
+        while (link.*) |capability| {
+
+            if (capability.right != .send or capability.base != id or capability.size != 1) {
+
+                link = &capability.next;
+                continue;
+
+            }
+
+            link.* = capability.next;
+            self.space.frames.release(@intFromPtr(capability)) catch @panic("Capability ownership");
+
+        }
+
+    }
+
+    fn add(self: *Process, right: Right, base: u64, size: u64) !void {
 
         if (!self.policy.permits(required(right))) return error.Denied;
         const capability: *Capability = @ptrFromInt(try self.space.frames.alloc());
@@ -178,7 +263,7 @@ pub const Process = struct {
 
     }
 
-    pub fn permits(self: *const Process, right: Right, base: u64, size: u64) bool {
+    fn holds(self: *const Process, right: Right, base: u64, size: u64) bool {
 
         if (!self.policy.permits(required(right))) return false;
         var current = self.capabilities;

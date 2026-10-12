@@ -3,6 +3,7 @@ const std = @import("std");
 const boot = @import("../../boot/info.zig");
 const process = @import("../../kernel/process.zig");
 const memory = @import("../../kernel/memory.zig");
+const schedule = @import("../../kernel/schedule.zig");
 const acpi = @import("../../board/pc/acpi.zig");
 pub const apic = @import("../../board/pc/apic.zig");
 const cpu = @import("cpu.zig");
@@ -31,11 +32,13 @@ pub const Core = struct {
     emergency: [3]usize,
 
     current: ?*process.Process = null,
-    last_id: u64 = 0,
     idle: context.Context,
 
     /// Sent a `wake` interrupt it has not yet taken.
-    kicked: bool = false,
+    kicked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// Retirements counted when it last entered the kernel; zero while it is outside.
+    seen: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     ticks: u64 = 0,
     switches: u64 = 0,
@@ -174,7 +177,7 @@ pub fn prepare(info: *const boot.Info, frames: *memory.Frames, log: Log) !void {
         const flags = acpi.read(u32, madt, offset + (if (kind == 0) @as(usize, 4) else 8));
 
         if (flags & 1 == 0 or id == bsp) continue;
-        if (id > 255) return error.UnsupportedApic;
+        if (id >= schedule.capacity) return error.UnsupportedApic;
 
         try addCore(id, frames);
 
@@ -275,18 +278,18 @@ pub fn route(irq: u4, target: u32) !void {
 
 }
 
-/// Sends idle processors other than `self` a `wake` interrupt, one for each of `ready` processes waiting to run.
-pub fn kick(self: *const Core, ready: usize) void {
+/// Sends idle processors other than `self` a `wake` interrupt, one for each process waiting to run.
+pub fn kick(self: *const Core) void {
 
-    var left = ready;
+    var left = schedule.waiting();
     var current = cores;
 
     while (current) |core| : (current = core.next) {
 
         if (left == 0) return;
-        if (core == self or core.current != null or core.kicked or !core.online.load(.acquire)) continue;
+        if (core == self or @atomicLoad(?*process.Process, &core.current, .monotonic) != null or !core.online.load(.acquire)) continue;
+        if (core.kicked.swap(true, .acq_rel)) continue;
 
-        core.kicked = true;
         apic.send(core.id, 0x4000 | wake);
         left -= 1;
 

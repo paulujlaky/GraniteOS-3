@@ -31,19 +31,18 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
 
     const core = machine.local();
 
-    while (root.lock.swap(true, .acquire)) arch.cpu.relax();
-
-    core.kicked = false;
+    root.enter(core);
+    core.kicked.store(false, .release);
 
     // Every space maps the kernel the same way, so the caller's page tables stay active until another process is chosen.
     const number = frame.rax;
-    var kept: ?*process.Process = null;
+    const now = root.ticks.load(.acquire);
+    var outcome: schedule.Outcome = .yield;
 
     if (core.current) |task| {
 
         task.context.frame = frame.*;
         task.context.floating = floating.*;
-        task.state = .ready;
 
         if (frame.vector == 32) {
 
@@ -52,10 +51,8 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
 
         } else if (frame.vector == 128) {
 
-            calls.handle(task, root.ticks);
-
-            // A call that leaves its caller ready carries on with it, rather than passing the processor on, unless it yields.
-            if (task.state == .ready and number != @intFromEnum(abi.Call.yield)) kept = task;
+            // A call that leaves its caller running carries on with it, rather than passing the processor on, unless it yields.
+            outcome = calls.handle(task, now);
 
         } else if (frame.vector < 32) {
 
@@ -64,14 +61,7 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
 
             if (options.self_test) check.faulted(task, frame);
 
-            task.state = .dead;
-
-        }
-
-        if (task.doomed) {
-
-            task.state = .dead;
-            kept = null;
+            outcome = .exit;
 
         }
 
@@ -82,41 +72,48 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
 
     }
 
-    // Nothing may free the page tables still active here, and an idle processor holds none of them.
-    if (kept == null) arch.paging.activate(machine.kernel.root);
-
     if (frame.vector == 32) core.ticks += 1;
-    if (frame.vector == 32 and core.id == root.primary) root.ticks +|= 1;
+    if (frame.vector == 32 and core.id == root.primary) _ = root.ticks.fetchAdd(1, .release);
     if (frame.vector >= machine.legacy and frame.vector < machine.legacy + 16) service.interrupt(@intCast(frame.vector - machine.legacy));
-    ipc.expire(root.processes, root.ticks);
+    ipc.expire(core.id, root.ticks.load(.acquire));
     if (frame.vector >= 32 and frame.vector != 128 and frame.vector != 255) machine.apic.write(0xb0, 0);
 
-    core.current = null;
-    root.reap();
+    root.collect();
     service.maintain();
 
-    const selected = kept orelse schedule.choose(root.processes, core.id, core.last_id);
+    var kept: ?*process.Process = null;
+
+    if (core.current) |task| {
+
+        outcome = schedule.release(core.id, task, outcome);
+        if (outcome == .exit) root.kill(task, true);
+        if (outcome == .keep) kept = task;
+
+    }
+
+    core.current = kept orelse schedule.pick(core.id);
     var result: *const arch.context.Context = &core.idle;
 
-    if (selected) |task| {
+    if (core.current) |task| {
 
-        task.state = .running;
-        task.home = core.id;
-        core.current = task;
-        core.last_id = task.id;
         if (kept == null) core.switches += 1;
 
         // Unmapping leaves stale translations behind, which reloading the page tables flushes.
         if (kept == null or number == @intFromEnum(abi.Call.release) or number == @intFromEnum(abi.Call.detach)) arch.paging.activate(task.space.root);
         result = &task.context;
 
+    } else {
+
+        // A retired process's page tables are freed once every processor has left the kernel, so an idle one must not keep them.
+        arch.paging.activate(machine.kernel.root);
+
     }
 
     // Whatever became ready that this processor cannot run goes to idle ones at once.
-    machine.kick(core, schedule.waiting(root.processes));
+    machine.kick(core);
 
     if (options.self_test) check.verify();
-    root.lock.store(false, .release);
+    root.leave(core);
 
     return result;
 
