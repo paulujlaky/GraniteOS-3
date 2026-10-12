@@ -173,15 +173,18 @@ var now = Day{ .year = 1970, .month = 1, .day = 1 };
 
 var back = gui.tool(.left, &earlier);
 var title_bytes: [32]u8 = undefined;
+
 var title = gui.label("", theme.title_text.with(.{
 
     .grow = 1,
     .text_align = .center,
 
 }));
+
 var forward = gui.tool(.right, &later);
 var today_button = gui.button("Today", &home);
 var bar_parts = [_]*gui.Node{ &back, &title, &forward, &today_button };
+
 var bar = gui.box(theme.bar.with(.{
 
     .padding = gui.Edges.axes(6, theme.spacing),
@@ -190,6 +193,7 @@ var bar = gui.box(theme.bar.with(.{
 
 var heads: [8]gui.Node = undefined;
 var head_list: [8]*gui.Node = undefined;
+
 var head = gui.box(.{
 
     .direction = .row,
@@ -207,13 +211,16 @@ var cells: [42]gui.Node = undefined;
 var row_parts: [6][8]*gui.Node = undefined;
 var rows: [6]gui.Node = undefined;
 var row_list: [6]*gui.Node = undefined;
+
 var grid = gui.box(.{
 
     .grow = 1,
     .gap = 2,
 
 }, &row_list);
+
 var month_parts = [_]*gui.Node{ &head, &grid };
+
 var month_box = gui.box(.{
 
     .grow = 1,
@@ -227,12 +234,15 @@ var detail = gui.label("", .{});
 var note_bytes: [96]u8 = undefined;
 var note = gui.label("", theme.caption);
 var footer_parts = [_]*gui.Node{ &detail, &note };
+
 var footer = gui.box(theme.panel.with(.{
 
     .gap = 4,
 
 }), &footer_parts);
+
 var footer_frame_parts = [_]*gui.Node{&footer};
+
 var footer_frame = gui.box(.{
 
     .padding = gui.Edges{ .right = theme.spacing, .bottom = theme.spacing, .left = theme.spacing },
@@ -278,6 +288,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         .text_align = .center,
 
     }));
+
     head_list[0] = &heads[0];
 
     for (1..8) |index| {
@@ -288,6 +299,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             .text_align = .center,
 
         }));
+
         head_list[index] = &heads[index];
 
     }
@@ -301,6 +313,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             .text_align = .center,
 
         }));
+
         row_parts[line][0] = &week_labels[line];
 
         for (0..7) |column| {
@@ -312,6 +325,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
                 .text_align = .center,
 
             });
+
             dots[index] = gui.box(.{
 
                 .width = 4,
@@ -321,7 +335,9 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
                 .radius = 2,
 
             }, &.{});
+
             dot_parts[index] = .{&dots[index]};
+
             dot_rows[index] = gui.box(.{
 
                 .padding = .{
@@ -333,6 +349,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
                 .items = .center,
 
             }, &dot_parts[index]);
+
             cell_parts[index] = .{ &numbers[index], &dot_rows[index] };
             cells[index] = gui.box(day_style, &cell_parts[index]);
             cells[index].action = &pick;
@@ -348,6 +365,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             .gap = 2,
 
         }, &row_parts[line]);
+
         row_list[line] = row;
 
     }
@@ -359,6 +377,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Calendar",
         .application = .calendar,
+
         .width = 440,
         .height = 470,
 
@@ -412,6 +431,7 @@ fn key(event: api.Event) void {
 fn go(day: Day) void {
 
     picked = day;
+
     shown = .{
 
         .year = day.year,
@@ -419,6 +439,7 @@ fn go(day: Day) void {
         .day = 1,
 
     };
+
     fill();
 
 }

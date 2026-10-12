@@ -25,6 +25,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         const request = api.receive(true) catch continue;
         const value = protocol.value(request.second);
+
         const result: u64 = switch (protocol.operation(request.second)) {
 
             .hello => protocol.version,

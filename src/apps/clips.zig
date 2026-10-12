@@ -27,16 +27,21 @@ var heading = gui.label("Clipboard", theme.caption.with(.{
     .grow = 1,
 
 }));
+
 var clear_button = gui.button("Clear", &clear);
 var top_parts = [_]*gui.Node{ &heading, &clear_button };
+
 var top = gui.box(.{
 
     .height = theme.control,
+
     .padding = .axes(0, 4),
+
     .direction = .row,
     .items = .center,
 
 }, &top_parts);
+
 var empty = gui.label("Nothing copied yet.", theme.caption.with(.{
 
     .height = 60,
@@ -52,12 +57,15 @@ var line_bytes: [most][24]u8 = undefined;
 var row_parts: [most][2]*gui.Node = undefined;
 var rows: [most]gui.Node = undefined;
 var row_list: [most]*gui.Node = undefined;
+
 var list = gui.box(.{
 
     .gap = 2,
 
 }, &row_list);
+
 var parts = [_]*gui.Node{ &top, &empty, &list };
+
 var root = gui.box(theme.popup.with(.{
 
     .padding = gui.Edges.all(8),
@@ -76,15 +84,18 @@ pub fn init(size: gui.Rect) void {
         lines[index] = gui.label("", .{});
         details[index] = gui.label("", theme.caption);
         row_parts[index] = .{ &lines[index], &details[index] };
+
         row.* = gui.box(theme.item.with(.{
 
             .height = 50,
+
             .direction = .column,
             .gap = 2,
             .items = .stretch,
             .justify = .center,
 
         }), &row_parts[index]);
+
         row.action = &choose;
         row.data = index;
         row_list[index] = row;
@@ -92,11 +103,14 @@ pub fn init(size: gui.Rect) void {
     }
 
     screen = size;
+
     window = gui.Window.open(&root, .{
 
         .layer = .panel,
+
         .width = width,
         .height = 100,
+
         .hidden = true,
         .motion = .drop,
         .shadow = true,

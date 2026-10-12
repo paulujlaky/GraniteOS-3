@@ -445,6 +445,10 @@ var stale = [_]gui.Rect{.{}} ** 4;
 var look: gui.Cursor = .arrow;
 var launching: u64 = 0;
 
+/// The pointer has followed a device; until then the adapter's own pointer stays hidden, since a position it reported
+/// before any input, such as the middle of the screen, lingers in VNC viewers as a second pointer.
+var located = false;
+
 var clipboard: [64 * 1024]u8 = undefined;
 var copied: usize = 0;
 
@@ -483,7 +487,6 @@ pub export fn app_main(_: usize, base: usize, environment: *const api.abi.Enviro
 
         .svga => |*device| {
 
-            device.point(pointer);
             api.log(if (renderer != null) "display: ready (svga, 3D on)\n" else if (device.accelerated) "display: ready (svga, 3D failed)\n" else "display: ready (svga, 3D off)\n");
 
         },
@@ -509,6 +512,7 @@ pub export fn app_main(_: usize, base: usize, environment: *const api.abi.Enviro
 
         // While something moves, or the pointer shows busy for a while, waiting for a request must not stall what comes next.
         const timed = moving or launching != 0;
+
         var request = api.receive(!timed) catch {
 
             if (timed) api.sleep(if (moving) 1 else 5);
@@ -581,7 +585,6 @@ fn open(size: gui.Rect) bool {
 
     adopt(memory, size);
     wear(&screen.svga);
-    screen.svga.point(pointer);
 
     if (renderer) |*old| old.release();
     renderer = gpu.Gpu.init(&screen.svga, width, height);
@@ -609,6 +612,7 @@ fn framebuffer(base: usize, geometry: usize, shifts: usize) void {
     const height = geometry >> 16 & 0xffff;
     const stride = geometry >> 32;
     const mapped = api.map(base, stride * height * 4) catch api.exit(3);
+
     const size = gui.Rect{
 
         .width = @intCast(geometry & 0xffff),
@@ -640,6 +644,7 @@ fn adopt(memory: api.Shared, size: gui.Rect) void {
     const count: usize = @intCast(size.width * size.height);
 
     backing = memory;
+
     back = .{
 
         .pixels = std.mem.bytesAsSlice(u32, memory.bytes[0 .. count * 4]),
@@ -662,6 +667,7 @@ fn mode(request: api.Request, value: u64) u64 {
         .height = @intCast(value >> 16 & 0xffff),
 
     };
+
     const previous = back.bounds();
 
     if (size.width < smallest.width or size.height < smallest.height or !screen.svga.fits(@intCast(size.width), @intCast(size.height))) return protocol.invalid;
@@ -720,6 +726,7 @@ fn load() ?gui.Rect {
     if (bytes.len != 4) return null;
 
     const value = std.mem.readInt(u32, bytes[0..4], .little);
+
     const size = gui.Rect{
 
         .width = @intCast(value & 0xffff),
@@ -738,9 +745,11 @@ fn save(size: gui.Rect) void {
     files.directory("/system") catch {
 
     };
+
     files.create(saved) catch {
 
     };
+
     files.write(saved, 0, &std.mem.toBytes(std.mem.nativeToLittle(u32, value))) catch api.log("display: could not save the mode\n");
 
 }
@@ -754,6 +763,7 @@ fn describe() u64 {
         .frame => if (graphics != null) .intel else .framebuffer,
 
     };
+
     const device: u64 = if (graphics) |found| found.device else settings.device >> 16;
 
     return @as(u64, @intFromEnum(kind)) << 32 | device << 40;
@@ -825,12 +835,14 @@ fn attach(request: api.Request, region: u64) u64 {
         .client = request.first,
         .memory = memory,
         .area = area,
+
         .layer = spec.layer,
         .options = spec.options,
         .application = spec.application,
         .effect = spec.motion,
 
     };
+
     name(surface, spec);
     insert(index);
 
@@ -840,7 +852,8 @@ fn attach(request: api.Request, region: u64) u64 {
     // A window that had to shrink to fit learns its size before it first draws.
     if (area.width != spec.area.width or area.height != spec.area.height) tell(index);
 
-    changed = true;
+    // The session hears of windows, not of its own bars and menus or apps' popups.
+    if (surface.decorated()) changed = true;
 
     return index;
 
@@ -887,7 +900,7 @@ fn place(request: api.Request, id: u64) u64 {
     insert(index);
     if (spec.layer == .overlay) focus(index);
     compose(before.join(surface.footprint()));
-    changed = true;
+    if (surface.decorated()) changed = true;
 
     return 0;
 
@@ -977,6 +990,7 @@ fn windows(request: api.Request) u64 {
 
             .id = @intCast(index),
             .application = surface.application,
+
             .state = .{
 
                 .focused = focused == index,
@@ -984,10 +998,12 @@ fn windows(request: api.Request) u64 {
                 .maximized = surface.tile == .full,
 
             },
+
             .length = @intCast(surface.length),
             .title = surface.title,
 
         };
+
         count += 1;
 
     }
@@ -1079,6 +1095,7 @@ fn image(request: api.Request, handle: u64) u64 {
         .height = @intCast(height),
 
     };
+
     var touched = whole.intersect(.{
 
         .x = @bitCast(size[2]),
@@ -1087,6 +1104,7 @@ fn image(request: api.Request, handle: u64) u64 {
         .height = @bitCast(size[5]),
 
     }) orelse return 0;
+
     var slot = find(request.first, handle);
 
     if (slot == null or pictures[slot.?].canvas.width != width or pictures[slot.?].canvas.height != height) touched = whole;
@@ -1374,7 +1392,9 @@ fn layers(device: *gpu.Gpu, index: usize, limit: gui.Rect, whole: bool) void {
         .radius = curve,
 
     };
+
     const squares = corners.squares();
+
     const above = gui.Rect{
 
         .x = surface.area.x,
@@ -1383,6 +1403,7 @@ fn layers(device: *gpu.Gpu, index: usize, limit: gui.Rect, whole: bool) void {
         .height = surface.area.height - squares[0].height,
 
     };
+
     const between = gui.Rect{
 
         .x = squares[0].right(),
@@ -1429,6 +1450,7 @@ fn float(device: *gpu.Gpu, index: usize, visible: gui.Rect) void {
             .radius = curve,
 
         };
+
         const decorations = trim(index);
 
         device.cut(surface.area, curve);
@@ -1472,6 +1494,7 @@ fn paint(visible: gui.Rect) void {
         drawing = 0;
         if (surface.footprint().intersect(visible)) |limit| gui.draw.replay(&back, decorations.commands(), corner(surface.footprint()), limit, pixels);
         drawing = surface.client;
+
         if (surface.area.intersect(visible)) |limit| {
 
             // A window's content is cut to the curve of its frame's bottom corners.
@@ -1707,6 +1730,7 @@ fn press(code: u8) void {
         if (change >> @intCast(button) & 1 == 0) continue;
 
         const pressed = code >> @intCast(button) & 1 != 0;
+
         const event = api.Event{
 
             .kind = .button,
@@ -1719,6 +1743,7 @@ fn press(code: u8) void {
         if (!pressed) {
 
             if (button == 0) release();
+
             if (capture) |index| {
 
                 queue(index, local(index, event));
@@ -1989,6 +2014,7 @@ fn guide() gui.draw.List {
         .height = @intCast(back.height),
 
     };
+
     const zone = (aimed.zone() orelse return list).inset(8);
 
     list.round(zone, theme.corner + 2, gui.shade(0xffffff, 40));
@@ -2042,6 +2068,7 @@ fn queue(index: usize, event: api.Event) void {
 
     const owner = client(surfaces[index].client) orelse return;
     const capacity = owner.events.len;
+
     const item = Item{
 
         .surface = @intCast(index),
@@ -2087,6 +2114,7 @@ fn deliver(owner: *Client) void {
     const which: u64 = item.surface;
 
     owner.waiting = null;
+
     api.store(request, 0, std.mem.asBytes(&which)) catch {
 
     };
@@ -2130,6 +2158,7 @@ fn inform(notice: api.Event.Notice) void {
             .code = @intFromEnum(notice),
 
         });
+
         deliver(client(owner).?);
 
         return;
@@ -2150,6 +2179,7 @@ fn tell(index: usize) void {
         .y = @intCast(area.height),
 
     });
+
     deliver(client(surfaces[index].client).?);
 
 }
@@ -2218,7 +2248,7 @@ fn raise(index: usize) void {
     remove(index);
     insert(index);
     compose(surfaces[index].footprint());
-    changed = true;
+    if (surfaces[index].decorated()) changed = true;
 
 }
 
@@ -2275,6 +2305,7 @@ fn close(index: usize) void {
         aimed = .free;
 
     }
+
     if (hot != null and hot.?.index == index) hot = null;
     if (armed != null and armed.?.index == index) armed = null;
     if (capture == index) capture = null;
@@ -2284,7 +2315,7 @@ fn close(index: usize) void {
     const shown = surface.visible();
 
     surface.leaving = true;
-    changed = true;
+    if (surface.decorated()) changed = true;
 
     if (focused == index) {
 
@@ -2468,6 +2499,7 @@ fn trim(index: usize) gui.draw.List {
 
     const surface = &surfaces[index];
     const footprint = surface.footprint();
+
     var list = gui.draw.List{
 
         .bytes = &chrome,
@@ -2477,12 +2509,14 @@ fn trim(index: usize) gui.draw.List {
     };
 
     const active = focused == index;
+
     const frame = gui.draw.move(surface.frame(), .{
 
         .x = -footprint.x,
         .y = -footprint.y,
 
     });
+
     var below = frame;
 
     // A soft shadow a little below the frame, darker under the window in front.
@@ -2511,6 +2545,7 @@ fn trim(index: usize) gui.draw.List {
         .y = -footprint.y,
 
     });
+
     list.round(within, curve, theme.background);
     list.limit = bar.inset(border);
     list.round(within, curve, theme.raised);
@@ -2530,6 +2565,7 @@ fn trim(index: usize) gui.draw.List {
             .height = theme.title - border,
 
         };
+
         const lit = hot != null and hot.?.index == index and hot.?.part == which;
 
         if (lit) {
@@ -2539,6 +2575,7 @@ fn trim(index: usize) gui.draw.List {
             list.limit = bar.inset(border);
 
         }
+
         list.icon(switch (which) {
 
             .close => .close,
@@ -2546,6 +2583,7 @@ fn trim(index: usize) gui.draw.List {
             else => .minimize,
 
         }, if (which == .maximize) 12 else 15, spot, if (lit and which == .close) 0xffffff else if (active) theme.text else theme.muted);
+
         right -= control;
 
     }
@@ -2558,6 +2596,7 @@ fn trim(index: usize) gui.draw.List {
         .height = bar.height,
 
     };
+
     list.label(surface.name(), .sans, theme.small, .{
 
         .x = bar.x + theme.spacing,
@@ -2566,6 +2605,7 @@ fn trim(index: usize) gui.draw.List {
         .height = theme.title,
 
     }, if (active) theme.text else theme.muted, .left);
+
     list.limit = null;
 
     return list;
@@ -2643,6 +2683,7 @@ fn appearance() gui.Cursor {
 
     // A press in a surface's content keeps its pointer until release, wherever it goes.
     const index = capture orelse under(pointer) orelse return .arrow;
+
     const chosen = if (capture != null) surfaces[index].cursor else switch (part(index, pointer)) {
 
         .content => surfaces[index].cursor,
@@ -2687,12 +2728,13 @@ fn dress() void {
 
 }
 
-/// Gives the adapter's own pointer the image of `look`.
+/// Gives the adapter's own pointer the image of `look`, where the pointer is.
 fn wear(device: *svga.Device) void {
 
     const worn = gui.cursor.sprite(look);
 
     device.shape(worn.pixels, worn.width, worn.height, worn.hotspot);
+    if (located) device.point(pointer);
 
 }
 
@@ -2873,6 +2915,8 @@ fn move(x: i32, y: i32) void {
         .y = std.math.clamp(y, 0, @as(i32, @intCast(back.height)) - 1),
 
     };
+
+    located = true;
 
     switch (screen) {
 

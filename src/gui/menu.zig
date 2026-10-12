@@ -64,22 +64,26 @@ pub fn Menu(comptime choices: []const Choice) type {
 
                     self.icons[index] = root.box(theme.rule, &.{});
                     self.parts[index][0] = &self.icons[index];
+
                     self.rows[index] = root.box(.{
 
                         .padding = .axes(theme.gap / 2 - 1, 4),
 
                     }, self.parts[index][0..1]);
+
                     self.list[index] = &self.rows[index];
                     continue;
 
                 }
 
                 self.icons[index] = if (choice.icon) |which| root.icon(which, theme.icon) else root.box(theme.icon, &.{});
+
                 self.labels[index] = root.label(choice.title, .{
 
                     .grow = 1,
 
                 });
+
                 self.hints[index] = root.label(choice.hint, theme.caption);
                 self.parts[index] = .{ &self.icons[index], &self.labels[index], &self.hints[index] };
                 self.rows[index] = root.box(theme.item, &self.parts[index]);
@@ -97,13 +101,16 @@ pub fn Menu(comptime choices: []const Choice) type {
             self.window = Window.open(&self.root, .{
 
                 .layer = .popup,
+
                 .width = @max(size.width + theme.spacing, narrowest),
                 .height = size.height,
+
                 .hidden = true,
                 .shadow = true,
                 .motion = .drop,
 
             }) catch api.exit(3);
+
             self.window.react = &react;
             if (owner) |parent| parent.adopt(&self.window);
 
@@ -178,6 +185,7 @@ pub fn Menu(comptime choices: []const Choice) type {
                 else => return false,
 
             };
+
             const start: isize = if (event.key() == .home) -1 else if (event.key() == .end) choices.len else if (menu.focused) |row| @intCast(row.data) else if (step > 0) -1 else choices.len;
             var index = start;
 

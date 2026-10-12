@@ -25,36 +25,44 @@ var pan = gui.Point{};
 
 var previous = gui.tool(.left, &stepBack);
 var next = gui.tool(.right, &stepOn);
+
 var name = gui.label("", .{
 
     .grow = 1,
     .padding = .axes(0, 6),
 
 });
+
 var smaller = gui.tool(.zoom_out, &zoomOut);
 var scale_bytes: [16]u8 = undefined;
+
 var scale = gui.label("Fit", theme.caption.with(.{
 
     .width = 48,
     .text_align = .center,
 
 }));
+
 var larger = gui.tool(.zoom_in, &zoomIn);
 var fit = gui.tool(.zoom_fit, &fitWindow);
 var tools = [_]*gui.Node{ &previous, &next, &name, &smaller, &scale, &larger, &fit };
 var toolbar = gui.box(theme.bar, &tools);
+
 var canvas = gui.custom(&paint, .{
 
     .grow = 1,
 
 });
+
 var message = gui.label("Open a picture from Files to see it here.", theme.caption.with(.{
 
     .grow = 1,
     .text_align = .center,
 
 }));
+
 var parts = [_]*gui.Node{ &toolbar, &canvas, &message };
+
 var root = gui.box(.{
 
     .background = 0x101010,
@@ -88,6 +96,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Viewer",
         .application = .viewer,
+
         .width = size.width,
         .height = size.height,
 
@@ -318,6 +327,7 @@ fn step(direction: i2) void {
         if (std.mem.eql(u8, entry, current)) break place;
 
     } else 0;
+
     const length = names.items.len;
     const chosen = names.items[(position + length + @as(usize, if (direction < 0) length - 1 else 1)) % length];
 

@@ -110,6 +110,7 @@ pub const Command = union(enum) {
         radius: i32,
 
     },
+
     text: struct {
 
         clip: Rect,
@@ -121,6 +122,7 @@ pub const Command = union(enum) {
         string: []const u8,
 
     },
+
     image: struct {
 
         clip: Rect,
@@ -128,6 +130,7 @@ pub const Command = union(enum) {
         handle: u64,
 
     },
+
     shadow: struct {
 
         clip: Rect,
@@ -137,6 +140,7 @@ pub const Command = union(enum) {
         blur: i32,
 
     },
+
     form: struct {
 
         clip: Rect,
@@ -144,6 +148,7 @@ pub const Command = union(enum) {
         color: u32,
 
     },
+
     curve: struct {
 
         clip: Rect,
@@ -208,7 +213,9 @@ pub const List = struct {
         self.append(std.mem.asBytes(&Shape{
 
             .header = header(.shape, @sizeOf(Shape), clip),
+
             .area = wire(area),
+
             .color = color,
             .radius = radius,
 
@@ -226,8 +233,10 @@ pub const List = struct {
         self.append(std.mem.asBytes(&Run{
 
             .header = header(.text, @intCast(@sizeOf(Run) + std.mem.alignForward(usize, string.len, 4)), clip),
+
             .x = x,
             .baseline = baseline,
+
             .color = color,
             .size = size,
             .face = @intFromEnum(face),
@@ -261,7 +270,9 @@ pub const List = struct {
         self.append(std.mem.asBytes(&Soft{
 
             .header = header(.shadow, @sizeOf(Soft), clip),
+
             .area = wire(area),
+
             .color = color,
             .radius = radius,
             .blur = blur,
@@ -278,6 +289,7 @@ pub const List = struct {
         self.append(std.mem.asBytes(&Mark{
 
             .header = header(.form, @sizeOf(Mark), clip),
+
             .shape = @intFromEnum(shape),
             .color = color,
             .values = shape.values(),
@@ -292,6 +304,7 @@ pub const List = struct {
         const count = @min(points.len, sketch.most);
         const dx: f32 = @floatFromInt(origin.x);
         const dy: f32 = @floatFromInt(origin.y);
+
         var box = (sketch.Polyline{
 
             .points = points[0..count],
@@ -316,9 +329,11 @@ pub const List = struct {
         self.append(std.mem.asBytes(&Trace{
 
             .header = header(.curve, @intCast(size), clip),
+
             .color = color,
             .width = width,
             .count = @intCast(count),
+
             .under = shading.colors,
             .floor = shading.floor + dy,
             .ceiling = shading.ceiling + dy,
@@ -405,6 +420,7 @@ pub const Iterator = struct {
 
                             .clip = clip,
                             .area = rect(shape.area) orelse continue,
+
                             .color = shape.color,
                             .radius = std.math.clamp(shape.radius, 0, reach),
 
@@ -429,6 +445,7 @@ pub const Iterator = struct {
                             .clip = clip,
                             .x = run.x,
                             .baseline = run.baseline,
+
                             .color = run.color,
                             .size = run.size,
                             .face = std.enums.fromInt(font.Face, run.face) orelse continue,
@@ -470,6 +487,7 @@ pub const Iterator = struct {
 
                             .clip = clip,
                             .area = rect(soft.area) orelse continue,
+
                             .color = soft.color,
                             .radius = std.math.clamp(soft.radius, 0, reach),
                             .blur = std.math.clamp(soft.blur, 0, canvas.widest),
@@ -516,12 +534,15 @@ pub const Iterator = struct {
 
                             .clip = clip,
                             .points = points,
+
                             .width = trace.width,
                             .color = trace.color,
+
                             .under = if (trace.under[0] >> 24 == 0xff and trace.under[1] >> 24 == 0xff) null else .{
 
                                 .floor = trace.floor,
                                 .ceiling = trace.ceiling,
+
                                 .colors = trace.under,
                                 .radius = trace.radius,
 
@@ -604,6 +625,7 @@ pub fn replay(target: *canvas.Canvas, bytes: []const u8, origin: Point, limit: R
 
                 target.limit = limit.intersect(move(trace.clip, origin)) orelse continue;
                 if (trace.under) |area| sketch.shade(target, trace.points, area, shift);
+
                 target.cover(trace.color, sketch.Polyline{
 
                     .points = trace.points,

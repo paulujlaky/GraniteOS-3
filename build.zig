@@ -15,8 +15,10 @@ pub fn build(b: *std.Build) void {
     const application = b.addExecutable(.{
 
         .name = "probe",
+
         .use_llvm = true,
         .use_lld = true,
+
         .root_module = b.createModule(.{
 
             .root_source_file = b.path("src/user/main.zig"),
@@ -29,6 +31,7 @@ pub fn build(b: *std.Build) void {
 
             }),
             .optimize = optimize,
+
             .red_zone = false,
             .stack_check = false,
             .stack_protector = false,
@@ -39,6 +42,7 @@ pub fn build(b: *std.Build) void {
     });
 
     application.root_module.addAssemblyFile(b.path("src/user/asm/entry.S"));
+
     application.root_module.addAnonymousImport("abi", .{
 
         .root_source_file = b.path("src/kernel/abi.zig"),
@@ -62,6 +66,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+
         .red_zone = false,
         .stack_check = false,
         .stack_protector = false,
@@ -76,6 +81,7 @@ pub fn build(b: *std.Build) void {
     });
 
     module.addOptions("options", options);
+
     module.addAnonymousImport("application", .{
 
         .root_source_file = application.getEmittedBin(),
@@ -87,12 +93,14 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/api/root.zig"),
         .target = application.root_module.resolved_target,
         .optimize = optimize,
+
         .red_zone = false,
         .stack_check = false,
         .stack_protector = false,
         .code_model = .large,
 
     });
+
     api.addAnonymousImport("abi", .{
 
         .root_source_file = b.path("src/kernel/abi.zig"),
@@ -104,12 +112,14 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/gui/root.zig"),
         .target = application.root_module.resolved_target,
         .optimize = optimize,
+
         .red_zone = false,
         .stack_check = false,
         .stack_protector = false,
         .code_model = .large,
 
     });
+
     gui.addImport("api", api);
 
     const images = std.enums.values(abi.Image);
@@ -123,8 +133,10 @@ pub fn build(b: *std.Build) void {
         const program = b.addExecutable(.{
 
             .name = name,
+
             .use_llvm = true,
             .use_lld = true,
+
             .root_module = b.createModule(.{
 
                 .root_source_file = b.path(b.fmt("src/{s}/{s}.zig", .{
@@ -134,6 +146,7 @@ pub fn build(b: *std.Build) void {
                 })),
                 .target = application.root_module.resolved_target,
                 .optimize = optimize,
+
                 .red_zone = false,
                 .stack_check = false,
                 .stack_protector = false,
@@ -149,6 +162,7 @@ pub fn build(b: *std.Build) void {
         program.root_module.addAssemblyFile(b.path("src/user/asm/entry.S"));
         program.setLinkerScript(b.path("src/user/asm/link.ld"));
         b.installArtifact(program);
+
         module.addAnonymousImport(name, .{
 
             .root_source_file = program.getEmittedBin(),
@@ -190,6 +204,7 @@ pub fn build(b: *std.Build) void {
         }),
 
     });
+
     b.step("test", "Test boot contracts and kernel policies").dependOn(&b.addRunArtifact(tests).step);
 
 }

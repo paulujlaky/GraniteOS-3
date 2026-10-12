@@ -51,6 +51,7 @@ pub const Surface = struct {
         if (self.hidden) return;
 
         const half = self.memory.bytes.len / 2;
+
         var damage: ?api.display.Area = if (changed) |area| .{
 
             .x = area.x,
@@ -137,6 +138,7 @@ pub const Surface = struct {
         image.display.place(self.id, removal) catch {
 
         };
+
         self.attached = false;
 
     }

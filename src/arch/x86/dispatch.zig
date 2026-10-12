@@ -130,6 +130,7 @@ fn dump(frame: *const arch.context.Frame, active_root: usize) void {
 
     root.log.hex("rip", frame.rip);
     root.log.hex("rsp", frame.rsp);
+
     root.log.hex("cr2", asm volatile ("mov %%cr2, %[value]" // Read the faulting memory address.
         : [value] "=r" (-> usize),
     ));

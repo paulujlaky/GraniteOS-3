@@ -54,11 +54,13 @@ pub fn create(task: *process.Process, pages: u64) !Mapping {
     const region: *Region = @ptrFromInt(try root.frames.alloc());
 
     handles += 1;
+
     region.* = .{
 
         .handle = handles,
 
     };
+
     errdefer destroy(region);
 
     while (region.pages < pages) : (region.pages += 1) {
@@ -160,6 +162,7 @@ fn map(task: *process.Process, region: *Region) !usize {
     }
 
     task.mapped(address + (region.pages - 1) * 4096);
+
     slot.* = .{
 
         .id = task.id,

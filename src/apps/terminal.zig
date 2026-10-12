@@ -63,7 +63,9 @@ var view = gui.custom(&paint, .{
     .grow = 1,
 
 });
+
 var parts = [_]*gui.Node{&view};
+
 var root = gui.box(.{
 
     .background = 0x0f0f0f,
@@ -84,10 +86,12 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Terminal",
         .application = .terminal,
+
         .width = 760,
         .height = 460,
 
     }) catch api.exit(3);
+
     measure();
 
     var home_bytes: [256]u8 = undefined;
@@ -144,6 +148,7 @@ fn serve() void {
         api.reply(request, protocol.empty) catch {
 
         };
+
         waiting = null;
 
     };
@@ -164,6 +169,7 @@ fn handle(request: api.Request) void {
             feed(chunk[0..length]);
             back = 0;
             window.invalidate(&view);
+
             api.reply(request, 0) catch {
 
             };
@@ -195,6 +201,7 @@ fn deliver() void {
     waiting = null;
     head = (head + 1) % input.len;
     queued -= 1;
+
     api.reply(request, byte) catch {
 
     };
@@ -464,6 +471,7 @@ fn paint(node: *gui.Node, target: *gui.List) void {
 
             .x = area.x + margin + @as(i32, @intFromFloat(@as(f32, @floatFromInt(column)) * cell)),
             .y = y,
+
             .width = @intFromFloat(@ceil(cell)),
             .height = height,
 

@@ -112,6 +112,7 @@ pub const Image = struct {
         } else null);
 
         for (published) |entry| if (entry == self) return;
+
         for (&published) |*entry| if (entry.* == null) {
 
             entry.* = self;

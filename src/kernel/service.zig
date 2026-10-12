@@ -38,6 +38,7 @@ pub fn start() !void {
         .ipc, .time, .management, .diagnostics, .power
 
     });
+
     try task.grant(.manage, 0, 1);
     try task.grant(.power, 0, 1);
     try task.grant(.log, 0, 1);
@@ -88,6 +89,7 @@ pub fn maintain() void {
 
     if (!restarting or attempts == 3 or root.ticks < due) return;
     attempts += 1;
+
     start() catch {
 
         due = root.ticks +| 100;
@@ -129,6 +131,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
     task.image = image;
     task.generation = argument;
     task.context.frame.rsi = 0;
+
     switch (image) {
 
         .serial => try task.configure(.service, &.{
@@ -148,6 +151,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
                 .ipc, .time, .mmio, .dma, .diagnostics
 
             });
+
             const page = controller.?.base & ~@as(u64, 4095);
 
             try task.grant(.mmio, page, std.mem.alignForward(u64, controller.?.base + controller.?.size, 4096) - page);
@@ -162,6 +166,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
                 .ipc, .diagnostics
 
             });
+
             try task.grant(.log, 0, 1);
 
         },
@@ -172,6 +177,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
                 .ipc, .accounts, .diagnostics
 
             });
+
             try task.grant(.log, 0, 1);
 
         },
@@ -182,6 +188,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
                 .ipc, .mmio, .firmware, .diagnostics
 
             });
+
             try task.grant(.log, 0, 1);
 
             if (root.efi) |file| {
@@ -202,6 +209,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
                 .ipc, .time, .memory, .mmio, .ports, .dma, .diagnostics
 
             });
+
             try task.grant(.log, 0, 1);
 
             if (root.framebuffer) |screen| {
@@ -251,6 +259,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
                 .ipc, .time, .ports, .diagnostics
 
             });
+
             try task.grant(.port, 0x60, 1);
             try task.grant(.port, 0x64, 1);
             try task.grant(.log, 0, 1);
@@ -267,6 +276,7 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64) !u64 {
                 .ipc, .time, .mmio, .dma, .diagnostics
 
             });
+
             const page = host.?.base & ~@as(u64, 4095);
 
             try task.grant(.mmio, page, std.mem.alignForward(u64, host.?.base + host.?.size, 4096) - page);

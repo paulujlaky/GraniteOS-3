@@ -41,9 +41,11 @@ pub fn capture(services: *uefi.tables.BootServices) !?boot.Framebuffer {
 
         .base = mode.frame_buffer_base,
         .size = mode.frame_buffer_size,
+
         .width = info.horizontal_resolution,
         .height = info.vertical_resolution,
         .stride = info.pixels_per_scan_line,
+
         .red_mask = masks.red_mask,
         .green_mask = masks.green_mask,
         .blue_mask = masks.blue_mask,

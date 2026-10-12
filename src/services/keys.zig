@@ -121,6 +121,7 @@ pub const Relay = struct {
         .kind = .motion,
 
     },
+
     moved: bool = false,
 
     display: u64 = 0,

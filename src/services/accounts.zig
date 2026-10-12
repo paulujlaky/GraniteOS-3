@@ -10,6 +10,7 @@ const database = "/system/accounts";
 const first_user = 1000;
 const name_limit = 32;
 const password_limit = 128;
+
 const cost = bcrypt.Params{
 
     .rounds_log = 10,
@@ -50,6 +51,7 @@ comptime {
 var files = api.Files{
 
 };
+
 var input: [512]u8 = undefined;
 
 pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
@@ -243,6 +245,7 @@ fn create(caller: api.abi.Identity, name: []const u8, password: []const u8, priv
     record.length = @intCast(name.len);
     @memcpy(record.name[0..name.len], name);
     try seal(&record, password);
+
     try save(.{
 
         .index = index,

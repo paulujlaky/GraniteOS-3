@@ -276,6 +276,7 @@ const Layer = struct {
     rows: []const []const u8,
     x: usize = 0,
     y: usize = 0,
+
     turn: enum {
 
         none,

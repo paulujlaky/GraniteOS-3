@@ -59,6 +59,7 @@ const Operator = enum {
 const Key = struct {
 
     label: []const u8,
+
     kind: enum {
 
         digit,
@@ -71,6 +72,7 @@ const Key = struct {
         erase,
 
     },
+
     operator: Operator = .none,
 
 };
@@ -117,20 +119,25 @@ var failed = false;
 
 var history_tool = gui.tool(.history, &toggle);
 var expression_bytes: [96]u8 = undefined;
+
 var expression = gui.label("", theme.caption.with(.{
 
     .grow = 1,
     .text_align = .right,
 
 }));
+
 var top_parts = [_]*gui.Node{ &history_tool, &expression };
+
 var top = gui.box(.{
 
     .direction = .row,
     .items = .center,
 
 }, &top_parts);
+
 var value_bytes: [48]u8 = undefined;
+
 var value = gui.label("0", .{
 
     .face = .mono,
@@ -138,7 +145,9 @@ var value = gui.label("0", .{
     .text_align = .right,
 
 });
+
 var screen_parts = [_]*gui.Node{ &top, &value };
+
 var screen = gui.box(theme.panel.with(.{
 
     .padding = gui.Edges{ .top = 6, .right = 14, .bottom = 10, .left = 6 },
@@ -150,6 +159,7 @@ var buttons: [keys.len]gui.Node = undefined;
 var rows: [keys.len / columns]gui.Node = undefined;
 var row_parts: [keys.len / columns][columns]*gui.Node = undefined;
 var row_list: [keys.len / columns]*gui.Node = undefined;
+
 var pad = gui.box(.{
 
     .grow = 1,
@@ -165,6 +175,7 @@ var results: [kept]f64 = undefined;
 var lines: [kept]gui.Node = undefined;
 var line_list: [kept]*gui.Node = undefined;
 var count: usize = 0;
+
 var log = gui.box(.{
 
     .grow = 1,
@@ -172,14 +183,17 @@ var log = gui.box(.{
     .scroll = true,
 
 }, &line_list);
+
 var empty = gui.label("Results show here.", theme.caption.with(.{
 
     .grow = 1,
     .text_align = .center,
 
 }));
+
 var forget = gui.button("Clear history", &clear_history);
 var past_parts = [_]*gui.Node{ &log, &empty, &forget };
+
 var past = gui.box(.{
 
     .grow = 1,
@@ -188,6 +202,7 @@ var past = gui.box(.{
 }, &past_parts);
 
 var parts = [_]*gui.Node{ &screen, &pad, &past };
+
 var root = gui.box(.{
 
     .padding = .all(theme.spacing),
@@ -204,6 +219,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .width = 0,
         .height = null,
+
         .grow = 1,
         .size = 20,
 
@@ -213,12 +229,14 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         button.* = gui.button(entry_key.label, &press);
         button.data = index;
+
         button.style = switch (entry_key.kind) {
 
             .equals => theme.primary.with(.{
 
                 .width = 0,
                 .height = null,
+
                 .grow = 1,
                 .size = 22,
 
@@ -252,6 +270,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             .gap = 6,
 
         }, &row_parts[index]);
+
         row_list[index] = row;
 
     }
@@ -261,11 +280,14 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         line.* = gui.label("", theme.item.with(.{
 
             .height = 40,
+
             .face = .mono,
             .size = theme.small,
+
             .text_align = .right,
 
         }));
+
         line.action = &recall;
         line.data = index;
         line_list[index] = line;
@@ -278,6 +300,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Calculator",
         .application = .calculator,
+
         .width = 320,
         .height = 470,
 
@@ -318,6 +341,7 @@ fn typed(event: api.Event) void {
     }
 
     const digit = [1]u8{@truncate(event.char)};
+
     const found: ?Key = switch (event.key()) {
 
         .enter => keys[keys.len - 1],
@@ -464,6 +488,7 @@ fn run(key: Key) void {
 fn settle(finished: bool) bool {
 
     const right = current();
+
     const result = pending.apply(stored, right) orelse {
 
         failed = true;

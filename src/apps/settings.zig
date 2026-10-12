@@ -1,4 +1,4 @@
-//! Settings: the display mode, the wallpaper, accounts, and facts about this machine.
+//! Settings: the display mode, the wallpaper, and accounts.
 
 const std = @import("std");
 
@@ -16,7 +16,6 @@ const Section = enum {
     display,
     appearance,
     accounts,
-    about,
 
 };
 
@@ -31,12 +30,12 @@ const Pending = enum {
 };
 
 const modes = [_][2]u16{ .{ 1024, 768 }, .{ 1280, 720 }, .{ 1280, 800 }, .{ 1366, 768 }, .{ 1440, 900 }, .{ 1600, 900 }, .{ 1920, 1080 } };
+
 const sections = [_]struct { title: []const u8, icon: gui.Icon }{
 
     .{ .title = "Display", .icon = .monitor },
     .{ .title = "Appearance", .icon = .palette },
     .{ .title = "Accounts", .icon = .users },
-    .{ .title = "About", .icon = .info },
 
 };
 
@@ -64,9 +63,11 @@ var tab_labels: [sections.len]gui.Node = undefined;
 var tab_parts: [sections.len][2]*gui.Node = undefined;
 var tabs: [sections.len]gui.Node = undefined;
 var tab_list: [sections.len]*gui.Node = undefined;
+
 var sidebar = gui.box(.{
 
     .width = 180,
+
     .padding = .all(theme.gap),
     .gap = 2,
 
@@ -81,12 +82,15 @@ var display_note = gui.label("", theme.caption);
 var mode_labels: [modes.len][16]u8 = undefined;
 var mode_rows: [modes.len]gui.Node = undefined;
 var mode_list: [modes.len]*gui.Node = undefined;
+
 var mode_box = gui.box(.{
 
     .gap = 2,
 
 }, &mode_list);
+
 var display_parts = [_]*gui.Node{ &display_title, &display_note, &mode_box };
+
 var display_page = gui.box(.{
 
     .gap = theme.spacing,
@@ -95,26 +99,31 @@ var display_page = gui.box(.{
 
 // Appearance.
 var appearance_title = gui.label("Wallpaper", theme.title_text);
-var appearance_note = gui.label("Granite is drawn fresh for your screen; or show a PNG picture from your files.", theme.caption);
+var appearance_note = gui.label("Personalize your desktop.", theme.caption);
 var granite = gui.button("Use granite", &useGranite);
 var picture_bytes: [256]u8 = undefined;
+
 var picture_text = gui.Text{
 
     .buffer = &picture_bytes,
     .placeholder = "/home/you/picture.png",
 
 };
+
 var picture_field = gui.input(&picture_text);
 var picture_apply = gui.button("Use picture", &usePicture);
 var picture_parts = [_]*gui.Node{ &picture_field, &picture_apply };
+
 var picture_row = gui.box(.{
 
     .direction = .row,
     .gap = theme.gap,
 
 }, &picture_parts);
+
 var appearance_status = gui.label("", theme.caption);
 var appearance_parts = [_]*gui.Node{ &appearance_title, &appearance_note, &granite, &picture_row, &appearance_status };
+
 var appearance_page = gui.box(.{
 
     .gap = theme.spacing,
@@ -136,47 +145,37 @@ var account_roles: [8]gui.Node = undefined;
 var account_parts: [8][3]*gui.Node = undefined;
 var account_rows: [8]gui.Node = undefined;
 var account_list: [8]*gui.Node = undefined;
+
 var account_box = gui.box(.{
 
     .gap = 2,
 
 }, &account_list);
+
 var add = gui.button("Add account", &addAccount);
 var administrator = gui.button("Administrator", &toggleAdministrator);
 var remove = gui.button("Remove", &removeAccount);
 var password = gui.button("Change password", &changePassword);
 var account_actions = [_]*gui.Node{ &add, &administrator, &remove, &password };
+
 var account_bar = gui.box(.{
 
     .direction = .row,
     .gap = theme.gap,
 
 }, &account_actions);
+
 var accounts_status = gui.label("", theme.caption);
 var accounts_parts = [_]*gui.Node{ &accounts_title, &account_box, &account_bar, &accounts_status };
+
 var accounts_page = gui.box(.{
 
     .gap = theme.spacing,
 
 }, &accounts_parts);
 
-// About.
-var about_title = gui.label("GraniteOS 3", .{
+var pages = [_]*gui.Node{ &display_page, &appearance_page, &accounts_page };
 
-    .size = 26,
-
-});
-var about_tagline = gui.label("A practical, everyday operating system written in Zig.", theme.caption);
-var fact_bytes: [5][96]u8 = undefined;
-var facts: [5]gui.Node = undefined;
-var about_parts = [_]*gui.Node{ &about_title, &about_tagline, &facts[0], &facts[1], &facts[2], &facts[3], &facts[4] };
-var about_page = gui.box(.{
-
-    .gap = theme.gap,
-
-}, &about_parts);
-
-var pages = [_]*gui.Node{ &display_page, &appearance_page, &accounts_page, &about_page };
 var content = gui.box(.{
 
     .grow = 1,
@@ -184,13 +183,16 @@ var content = gui.box(.{
     .scroll = true,
 
 }, &pages);
+
 var body_parts = [_]*gui.Node{ &sidebar, &content };
+
 var body = gui.box(.{
 
     .grow = 1,
     .direction = .row,
 
 }, &body_parts);
+
 var root_parts = [_]*gui.Node{ &body };
 var root = gui.box(.{}, &root_parts);
 
@@ -210,11 +212,13 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
         tab_icons[index] = gui.icon(section.icon, theme.icon);
         tab_labels[index] = gui.label(section.title, .{});
         tab_parts[index] = .{ &tab_icons[index], &tab_labels[index] };
+
         tabs[index] = gui.box(theme.item.with(.{
 
             .height = 36,
 
         }), &tab_parts[index]);
+
         tabs[index].action = &pick;
         tabs[index].data = index;
         tab_list[index] = &tabs[index];
@@ -228,6 +232,7 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
             .padding = gui.Edges.axes(0, 12),
 
         }));
+
         mode_rows[index].action = &setMode;
         mode_rows[index].data = index;
         mode_list[index] = &mode_rows[index];
@@ -240,30 +245,34 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
 
             .width = 30,
             .height = 30,
+
             .background = theme.selected,
             .radius = 15,
+
             .text_align = .center,
 
         });
+
         account_labels[index] = gui.label("", .{
 
             .grow = 1,
 
         });
+
         account_roles[index] = gui.label("", theme.caption);
         account_parts[index] = .{ &account_avatars[index], &account_labels[index], &account_roles[index] };
+
         account_rows[index] = gui.box(theme.item.with(.{
 
             .height = 44,
 
         }), &account_parts[index]);
+
         account_rows[index].action = &pickAccount;
         account_rows[index].data = index;
         account_list[index] = &account_rows[index];
 
     }
-
-    for (&facts, 0..) |*fact, index| fact.* = gui.label(fact_bytes[index][0..0], .{});
 
     picture_field.style = picture_field.style.with(.{
 
@@ -275,6 +284,7 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
 
         .title = "Settings",
         .application = .settings,
+
         .width = 720,
         .height = 480,
 
@@ -307,7 +317,6 @@ fn show(section: Section) void {
 
         .display => describeDisplay(""),
         .accounts => loadAccounts(),
-        .about => describe(),
         .appearance => {
 
         },
@@ -326,7 +335,7 @@ fn describeDisplay(problem: []const u8) void {
 
     const adapter = screen.adapter() catch api.display.Adapter{};
 
-    display_note.content.label = if (problem.len != 0) problem else std.fmt.bufPrint(&display_note_bytes, "Showing {d} x {d} on {s}, {s}. Administrators can choose another mode.", .{ size.width, size.height, adapter.name(), adapter.rendering() }) catch "";
+    display_note.content.label = if (problem.len != 0) problem else std.fmt.bufPrint(&display_note_bytes, "{d} x {d} on {s}, {s}.", .{ size.width, size.height, adapter.name(), adapter.rendering() }) catch "";
 
     for (modes, 0..) |mode, index| mode_rows[index].selected = mode[0] == size.width and mode[1] == size.height;
 
@@ -533,6 +542,7 @@ fn advance(value: []const u8) void {
 
                 pending = .none;
                 dialog.edit.secret = false;
+
                 return say(switch (err) {
 
                     error.Exists => "That name is taken.",
@@ -580,35 +590,6 @@ fn advance(value: []const u8) void {
 fn say(message: []const u8) void {
 
     accounts_status.content.label = message;
-    window.refresh();
-
-}
-
-/// Fills the About page from the kernel's counters.
-fn describe() void {
-
-    var records: [1]api.abi.Usage = undefined;
-    const summary = api.stats(&records) catch api.abi.Summary{};
-    const usage = files.usage() catch api.files.Usage{
-
-        .total = 0,
-        .free = 0,
-
-    };
-    const size = screen.size() catch api.display.Area{};
-    const seconds = summary.uptime / 100;
-    const values = [_][]const u8{
-
-        std.fmt.bufPrint(&fact_bytes[0], "Signed in as {s}", .{user}) catch "",
-        std.fmt.bufPrint(&fact_bytes[1], "{d} processors, {d} processes", .{ summary.processors, summary.processes }) catch "",
-        std.fmt.bufPrint(&fact_bytes[2], "{d} MB of {d} MB memory in use", .{ (summary.pages - summary.free) * 4 / 1024, summary.pages * 4 / 1024 }) catch "",
-        std.fmt.bufPrint(&fact_bytes[3], "{d} MB of {d} MB disk in use", .{ (usage.total - usage.free) >> 20, usage.total >> 20 }) catch "",
-        std.fmt.bufPrint(&fact_bytes[4], "Display {d} x {d}, up {d}h {d:0>2}m", .{ size.width, size.height, seconds / 3600, seconds / 60 % 60 }) catch "",
-
-    };
-
-    for (&facts, values) |*fact, value| fact.content.label = value;
-
     window.refresh();
 
 }

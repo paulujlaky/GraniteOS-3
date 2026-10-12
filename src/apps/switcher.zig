@@ -24,6 +24,7 @@ var titles: [most]gui.Node = undefined;
 var parts: [most][2]*gui.Node = undefined;
 var tiles: [most]gui.Node = undefined;
 var list: [most]*gui.Node = undefined;
+
 var root = gui.box(theme.popup.with(.{
 
     .padding = gui.Edges.all(10),
@@ -47,22 +48,28 @@ pub fn init(size: gui.Rect) void {
             .size = 30,
 
         }));
+
         titles[index] = gui.label("", theme.caption.with(.{
 
             .text_align = .center,
 
         }));
+
         parts[index] = .{ &icons[index], &titles[index] };
+
         entry.* = gui.box(theme.item.with(.{
 
             .width = tile,
             .height = 96,
+
             .padding = gui.Edges.all(8),
+
             .direction = .column,
             .gap = 8,
             .justify = .center,
 
         }), &parts[index]);
+
         entry.action = &pick;
         entry.data = index;
         list[index] = entry;
@@ -70,11 +77,14 @@ pub fn init(size: gui.Rect) void {
     }
 
     screen = size;
+
     window = gui.Window.open(&root, .{
 
         .layer = .overlay,
+
         .width = tile,
         .height = 116,
+
         .hidden = true,
         .motion = .fade,
         .shadow = true,
@@ -199,6 +209,7 @@ fn pick(node: *gui.Node) void {
 fn finish(index: usize) void {
 
     window.hide();
+
     if (index < count) gui.display.activate(offered[index].id, .raise) catch {
 
     };

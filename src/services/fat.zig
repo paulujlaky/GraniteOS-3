@@ -125,6 +125,7 @@ pub fn Fat(comptime Disk: type) type {
                 const cluster = try self.allocate(previous);
 
                 if (first == 0) first = cluster;
+
                 if (cluster != previous + 1 and done > start) {
 
                     try self.put(run, bytes[start..done]);
@@ -154,6 +155,7 @@ pub fn Fat(comptime Disk: type) type {
                 .last = folder,
 
             };
+
             var cluster = folder;
 
             for (0..self.clusters) |_| {
@@ -169,6 +171,7 @@ pub fn Fat(comptime Disk: type) type {
                     for (0..16) |index| {
 
                         const entry = self.sector[index * 32 ..][0..32];
+
                         const slot = Slot{
 
                             .sector = lba,

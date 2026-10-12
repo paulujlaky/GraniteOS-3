@@ -214,6 +214,7 @@ pub const Window = struct {
 
         if (self.focused == target) return;
         if (self.focused) |old| self.invalidate(old);
+
         if (target) |new| {
 
             self.invalidate(new);
@@ -232,6 +233,7 @@ pub const Window = struct {
         if (spec.layer == layer) return;
 
         spec.layer = layer;
+
         self.surface.place(spec) catch {
 
         };
@@ -243,6 +245,7 @@ pub const Window = struct {
         var spec = self.surface.spec;
 
         spec.rename(title);
+
         self.surface.place(spec) catch {
 
         };
@@ -262,9 +265,11 @@ pub const Window = struct {
             .height = area.height,
 
         };
+
         self.surface.place(spec) catch {
 
         };
+
         self.refresh();
 
     }
@@ -331,6 +336,7 @@ pub const Window = struct {
         self.damage = .{};
         target.reset();
         if (self.root.style.background == null and self.surface.spec.layer == .window) target.fill(bounds, background);
+
         const marks = node.Marks{
 
             .hover = self.hovered,
@@ -559,6 +565,7 @@ pub const Window = struct {
                 const face = focused.typeface();
                 const width = focused.inner().width;
                 const shift = event.modifiers.shift;
+
                 const changed = clipboard(edit, event, multiline) or switch (event.key()) {
 
                     .up, .down => multiline and edit.vertical(face, focused.style.size, width, if (event.key() == .up) -1 else 1, shift),

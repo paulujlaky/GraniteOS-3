@@ -45,6 +45,7 @@ pub const Content = union(enum) {
 pub const Track = struct {
 
     at: Point,
+
     phase: enum {
 
         down,
@@ -68,6 +69,7 @@ pub const Marks = struct {
 pub const Node = struct {
 
     style: Style = .{},
+
     content: Content = .{
 
         .box = &.{},
@@ -257,6 +259,7 @@ pub const Node = struct {
             return;
 
         }
+
         const span = if (row) inner_area.width else inner_area.height;
         const across = if (row) inner_area.height else inner_area.width;
         var used: i32 = 0;
@@ -287,6 +290,7 @@ pub const Node = struct {
         }
 
         const free = if (box.scroll) 0 else @max(span - used, 0);
+
         var offset: i32 = if (box.scroll) -self.offset else if (grow != 0) 0 else switch (box.justify) {
 
             .center => @divTrunc(free, 2),
@@ -309,6 +313,7 @@ pub const Node = struct {
             const natural = if (row) size.height else size.width;
             const length = (if (row) size.width else size.height) + if (grow != 0) @divTrunc(free * child.style.grow, grow) else 0;
             const thickness = if (box.items == .stretch and fixed == null) across else @min(natural, across);
+
             const shift = switch (box.items) {
 
                 .center => @divTrunc(across - thickness, 2),
@@ -346,6 +351,7 @@ pub const Node = struct {
         if (target.limit) |limit| if (limit.intersect(self.rect) == null) return;
 
         const box = &self.style;
+
         const colors = box.paint(.{
 
             .hover = marks.hover == self,
@@ -355,6 +361,7 @@ pub const Node = struct {
             .invalid = self.invalid,
 
         });
+
         const fill = colors.background orelse under;
         const color = colors.color orelse box.color;
         const inner_area = self.inner();

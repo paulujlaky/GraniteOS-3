@@ -134,6 +134,7 @@ fn complete(sender: *Process, status: u64, message: u64) void {
     sender.state = .ready;
     sender.ticket = 0;
     sender.deadline = 0;
+
     sender.context.respond(.{
 
         .number = status,

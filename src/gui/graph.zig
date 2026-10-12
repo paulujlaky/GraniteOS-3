@@ -35,6 +35,7 @@ pub const Graph = struct {
 
     values: []const f32,
     look: Look = .{},
+
     figure: sketch.Figure = .{
 
         .paint = &paint,

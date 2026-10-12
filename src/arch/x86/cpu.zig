@@ -92,6 +92,7 @@ pub fn interruptsEnabled() bool {
     const flags = asm volatile ("pushfq; popq %[flags]" // Read the CPU flags.
         : [flags] "=r" (-> usize),
     );
+
     return flags & (1 << 9) != 0;
 
 }

@@ -87,6 +87,7 @@ test "physical allocator protects firmware state and detects invalid frees" {
 test "physical allocator rejects overlap overflow and insufficient metadata" {
 
     var storage: [128]u8 = undefined;
+
     var regions = [_]boot.Region{
 
         .{
@@ -172,9 +173,11 @@ fn fixture() [512]u8 {
         .machine = 62,
         .version = 1,
         .entry = 0x8000000000,
+
         .phoff = 64,
         .shoff = 0,
         .flags = 0,
+
         .ehsize = 64,
         .phentsize = 56,
         .phnum = 1,
@@ -188,9 +191,11 @@ fn fixture() [512]u8 {
 
         .kind = 1,
         .flags = 5,
+
         .offset = 256,
         .address = 0x8000000000,
         .physical = 0,
+
         .file_size = 8,
         .memory_size = 4096,
         .alignment = 1,
@@ -254,6 +259,7 @@ fn task(id: u64) process.Process {
     value.length = 0;
     value.signals = 0;
     value.identity = abi.nobody;
+
     value.policy = .{
 
         .layer = .service,
@@ -281,21 +287,25 @@ test "permission arrays distinguish services and deny undeclared authority" {
         .ports
 
     }));
+
     try std.testing.expectError(error.Denied, permission.Policy.init(.application, &.{
 
         .management
 
     }));
+
     try std.testing.expectError(error.Denied, permission.Policy.init(.application, &.{
 
         .mmio
 
     }));
+
     try std.testing.expectError(error.Denied, permission.Policy.init(.application, &.{
 
         .power
 
     }));
+
     try std.testing.expectError(error.Invalid, permission.Policy.init(.service, &.{
 
         .ipc, .ipc
@@ -303,6 +313,7 @@ test "permission arrays distinguish services and deny undeclared authority" {
     }));
 
     var owner = task(1);
+
     var grant = process.Capability{
 
         .right = .port, .base = 0x2f8, .size = 8
@@ -310,22 +321,27 @@ test "permission arrays distinguish services and deny undeclared authority" {
     };
 
     owner.capabilities = &grant;
+
     owner.policy = try permission.Policy.init(.service, &.{
 
         .ipc
 
     });
+
     try std.testing.expect(!owner.permits(.port, 0x2f8, 1));
     try std.testing.expect(!owner.policy.permits(.memory));
     try std.testing.expect(!owner.policy.permits(.time));
+
     owner.policy = try permission.Policy.init(.service, &.{
 
         .ipc, .ports
 
     });
+
     try std.testing.expect(owner.permits(.port, 0x2f8, 1));
     try std.testing.expect(!owner.permits(.port, 0x3f8, 1));
     try std.testing.expect(!owner.permits(.port, 0x2ff, 2));
+
     try std.testing.expectEqualSlices(abi.Permission, &.{
 
         .ipc, .ports
@@ -339,6 +355,7 @@ test "RPC authenticates one-shot replies and cancels both phases on peer death" 
     var client = task(1);
     var server = task(2);
     var stranger = task(3);
+
     var grant = process.Capability{
 
         .right = .send,
@@ -382,6 +399,7 @@ test "RPC deadlines release queued and delivered calls without reviving stale re
 
     var client = task(1);
     var server = task(2);
+
     var grant = process.Capability{
 
         .right = .send,
@@ -414,6 +432,7 @@ test "RPC deadlines release queued and delivered calls without reviving stale re
 test "capabilities reject wrong types overflow and boundary crossings" {
 
     var owner = task(1);
+
     var capability = process.Capability{
 
         .right = .port,
@@ -449,12 +468,14 @@ test "IPC rendezvous preserves sender identity and wakes blocked peers" {
     };
 
     sender.capabilities = &grant;
+
     sender.identity = .{
 
         .user = 1000,
         .admin = true,
 
     };
+
     try ipc.send(&sender, &sender, 2, 123);
     try std.testing.expectEqual(.sending, sender.state);
     ipc.receive(&sender, &receiver);
@@ -514,6 +535,7 @@ test "interrupts wake a receiving service and coalesce while it is busy" {
 
     var sender = task(1);
     var service = task(2);
+
     var grant = process.Capability{
 
         .right = .send,
@@ -585,6 +607,7 @@ test "process usage counts the RAM it maps but not device memory and marks image
         .frames = undefined,
 
     };
+
     sleeper.owner = 0;
     sleeper.image = null;
     sleeper.state = .sleeping;
@@ -659,6 +682,7 @@ test "MADT routes ISA interrupts through overrides to the serving I/O APIC" {
         .pin = 1,
 
     }, acpi.isa(&bytes, 1).?);
+
     try std.testing.expectEqual(acpi.Route{
 
         .controller = 0xfec01000,

@@ -143,6 +143,7 @@ pub fn Volume(comptime Disk: type) type {
     return struct {
 
         const Self = @This();
+
         const Found = struct {
 
             node: u64,
@@ -266,12 +267,14 @@ pub fn Volume(comptime Disk: type) type {
 
             try self.open(found.node);
             try self.resize(found.node, 0);
+
             try self.release(.{
 
                 .start = found.node,
                 .length = 1,
 
             });
+
             try self.disk.flush();
 
         }
@@ -647,6 +650,7 @@ pub fn Volume(comptime Disk: type) type {
 
                 last.length -= cut;
                 remaining -= cut;
+
                 try self.release(.{
 
                     .start = last.start + last.length,

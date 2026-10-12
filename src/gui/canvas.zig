@@ -438,6 +438,7 @@ pub const Canvas = struct {
                         .y = visible.y + @as(i32, @intCast(y)),
 
                     };
+
                     const fx = @as(f32, @floatFromInt(point.x)) + 0.5;
                     const dx = fx - std.math.clamp(fx, left + r, right - r);
                     const dy = @max(@as(f32, @floatFromInt(point.y)) + 0.5 - (bottom - r), 0);
@@ -702,6 +703,7 @@ pub fn anchor(face: *const font.Font, string: []const u8, size: f32, area: Rect,
 fn blend(pixel: *u32, color: u32, alpha: f32) void {
 
     if (alpha <= 0) return;
+
     if (alpha >= 1) {
 
         pixel.* = color;

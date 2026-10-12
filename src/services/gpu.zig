@@ -215,7 +215,6 @@ const Corner = struct {
 var softening: [gui.canvas.penumbra * gui.canvas.penumbra]f32 = undefined;
 var softening_scratch: [gui.canvas.penumbra * (gui.canvas.penumbra + gui.canvas.widest)]f32 = undefined;
 
-
 /// The size each image texture was defined at, zero while undefined, and our copy of its pixels.
 var defined = [_][2]u32{.{ 0, 0 }} ** textures;
 var copies = [_]?api.Shared{null} ** textures;
@@ -367,6 +366,7 @@ pub const Gpu = struct {
         texels[half] = 0x80808080;
         gpu.cursor.x = solid + 1;
         gpu.shelf = solid;
+
         gpu.dirty = .{
 
             .width = solid + 1,
@@ -441,12 +441,14 @@ pub const Gpu = struct {
 
         const id: u32 = @intCast(pictures + slot);
         const fresh = defined[slot][0] != width or defined[slot][1] != height;
+
         const whole = gui.Rect{
 
             .width = @intCast(width),
             .height = @intCast(height),
 
         };
+
         const area = if (fresh) whole else changed.intersect(whole) orelse return;
 
         // The device reads our own copy, so a client can neither change nor free what it is drawing.
@@ -462,6 +464,7 @@ pub const Gpu = struct {
                 return;
 
             };
+
             copies[slot] = copy;
             self.surface(id, texture_hint, a8r8g8b8, width, height);
             defined[slot] = .{ width, height };
@@ -563,6 +566,7 @@ pub const Gpu = struct {
             .radius = radius,
 
         };
+
         const squares = corners.squares();
         if (squares[0].width <= 0 or squares[0].width > largest_corner) return;
 
@@ -597,6 +601,7 @@ pub const Gpu = struct {
 
         // The layer holds premultiplied colour, so fading scales every channel alike.
         self.sample(layer, linear);
+
         self.stretch(.{ left, top, right, bottom }, .{
 
             (x + (left - box[0]) / across) / columns,
@@ -608,6 +613,7 @@ pub const Gpu = struct {
             (y + (bottom - box[1]) / down) / rows,
 
         }, level * 0x01010101);
+
         self.flush();
         self.sample(atlas, nearest);
 
@@ -772,6 +778,7 @@ pub const Gpu = struct {
         // Quads already staged sample the atlas, so they go first.
         self.flush();
         self.sample(@intCast(pictures + slot), linear);
+
         self.stage(visible, .{
 
             @as(f32, @floatFromInt(visible.x - area.x)) / width,
@@ -783,6 +790,7 @@ pub const Gpu = struct {
             @as(f32, @floatFromInt(visible.bottom() - area.y)) / height,
 
         }, 0xffffffff);
+
         self.flush();
         self.sample(atlas, nearest);
 
@@ -880,6 +888,7 @@ pub const Gpu = struct {
             .{ .x = right, .y = bottom, .u = u[1], .v = v[1], .color = tinted },
 
         });
+
         self.emit(.{
 
             .{ .x = left, .y = top, .u = u[0], .v = v[0], .color = tinted },
@@ -990,6 +999,7 @@ pub const Gpu = struct {
                 .color = ink,
 
             };
+
             const outward: f32 = if (area > 0) 1 else -1;
 
             // A fan inside the edge, and a pixel-wide band across it fading out.
@@ -1049,6 +1059,7 @@ pub const Gpu = struct {
             const away = [2]f32{ (end[0] - points[ends[1]][0]) / length, (end[1] - points[ends[1]][1]) / length };
             const side = [2]f32{ away[1], -away[0] };
             const steps: usize = @intFromFloat(std.math.clamp(@ceil(std.math.pi * @sqrt(10 * reach) / 2), 3, 64));
+
             const middle = Corner{
 
                 .x = end[0],
@@ -1149,6 +1160,7 @@ pub const Gpu = struct {
             .y = -edge(point.y, self.rows, self.shift),
             .u = centre,
             .v = centre,
+
             .color = point.color,
 
         };
@@ -1220,6 +1232,7 @@ pub const Gpu = struct {
         if (cached(key)) |slot| return if (slot.width == 0) null else slot;
 
         const face = gui.font.face(which);
+
         const bitmap = face.render(index, size / face.units, @as(f32, @floatFromInt(quarter)) / 4) orelse {
 
             _ = self.insert(key, 0, 0);
@@ -1287,13 +1300,17 @@ pub const Gpu = struct {
         slot.* = .{
 
             .key = key,
+
             .x = place.x,
             .y = place.y,
+
             .width = width,
             .height = height,
 
         };
+
         self.filled += 1;
+
         self.dirty = self.dirty.join(.{
 
             .x = @intCast(place.x),
@@ -1335,6 +1352,7 @@ pub const Gpu = struct {
             .y = @intCast(y),
 
         };
+
         self.shelf = @max(self.shelf, height);
 
         return .{
@@ -1355,11 +1373,13 @@ pub const Gpu = struct {
 
         @memset(&slots, .{});
         self.filled = 0;
+
         self.cursor = .{
 
             .x = solid + 1,
 
         };
+
         self.shelf = solid;
 
     }
@@ -1390,6 +1410,7 @@ pub const Gpu = struct {
             .height = 2,
 
         }, null, false, false, 0xff0000, all);
+
         self.quad(.{
 
             .width = 1,
@@ -1402,6 +1423,7 @@ pub const Gpu = struct {
             .height = 1,
 
         }, false, false, 0x0000ff, all);
+
         self.flush();
         self.device.submit(readback_image, &.{ result, 0, 0 });
         self.device.idle();

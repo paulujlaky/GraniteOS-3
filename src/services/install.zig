@@ -16,6 +16,7 @@ const description = "GraniteOS";
 
 var table: gpt.Table = undefined;
 var esp: fat.Fat(disk.Disk) = undefined;
+
 var accounts = api.Accounts{
 
 };
@@ -165,6 +166,7 @@ fn register(system: gpt.Partition) !u16 {
     const entry = for (0..0x100) |value| {
 
         const number: u16 = @intCast(value);
+
         const found = api.variable(&name(number), &existing, false) catch |err| {
 
             if (err == error.Missing and free == null) free = number;
@@ -184,6 +186,7 @@ fn register(system: gpt.Partition) !u16 {
     var kept: usize = 1;
 
     order[0] = entry;
+
     for (order[1 .. count + 1]) |value| {
 
         if (value == entry) continue;

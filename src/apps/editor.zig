@@ -28,6 +28,7 @@ var text = gui.Text{
     .placeholder = "Start typing...",
 
 };
+
 var page = gui.area(&text);
 
 var path_bytes: [512]u8 = undefined;
@@ -43,35 +44,43 @@ var load = gui.tool(.folder_open, &askOpen);
 var keep = gui.tool(.save, &save);
 var divider = gui.box(theme.divider, &.{});
 var keep_as = gui.button("Save as", &askSave);
+
 var name = gui.label("Untitled", .{
 
     .grow = 1,
     .padding = .axes(0, 6),
 
 });
+
 var tools = [_]*gui.Node{ &create, &load, &keep, &divider, &name, &keep_as };
 var toolbar = gui.box(theme.bar, &tools);
 
 var dialog = gui.Dialog{};
 
 var position_bytes: [48]u8 = undefined;
+
 var position = gui.label("", theme.caption.with(.{
 
     .grow = 1,
 
 }));
+
 var notice = gui.label("", theme.caption);
 var status_parts = [_]*gui.Node{ &position, &notice };
+
 var status = gui.box(.{
 
     .height = 26,
+
     .padding = .axes(0, theme.spacing),
+
     .direction = .row,
     .items = .center,
 
     .background = theme.raised,
 
 }, &status_parts);
+
 var parts = [_]*gui.Node{ &toolbar, &page, &status };
 var root = gui.box(.{}, &parts);
 
@@ -87,18 +96,24 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     const memory = api.share(capacity / 4096) catch api.exit(3);
 
     text.buffer = memory.bytes;
+
     page.style = theme.area.with(.{
 
         .height = null,
         .grow = 1,
+
         .face = .mono,
         .size = 14,
+
         .radius = 0,
         .border_width = 0,
+
         .padding = gui.Edges.axes(10, 14),
+
         .background = theme.background,
 
     });
+
     keep_as.style = keep_as.style.with(.{
 
         .height = 30,
@@ -114,8 +129,10 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Editor",
         .application = .editor,
+
         .width = 760,
         .height = 540,
+
         .capacity = 1024 * 1024,
 
     }) catch api.exit(3);
@@ -147,6 +164,7 @@ fn react(event: api.Event) void {
     if (event.chord(control, 's')) return save(&keep);
     if (event.chord(control, 'o')) return askOpen(&load);
     if (event.chord(control, 'n')) return startNew(&create);
+
     if (event.pressing(.escape) and dialog.open()) {
 
         dialog.close();

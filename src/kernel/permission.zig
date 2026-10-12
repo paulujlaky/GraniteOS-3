@@ -1,6 +1,7 @@
 const abi = @import("abi.zig");
 
 pub const PolicyError = error{ Denied, Invalid };
+
 pub const application = Policy{
 
     .layer = .application,
@@ -21,6 +22,7 @@ pub const Policy = struct {
 
     layer: abi.Layer = .application,
     length: usize = 0,
+
     permissions: [abi.permission_count]abi.Permission = [_]abi.Permission{
 
         .ipc

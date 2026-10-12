@@ -46,6 +46,7 @@ pub const Date = struct {
             .secs = seconds,
 
         };
+
         const day = moment.getEpochDay();
         const year = day.calculateYearDay();
         const date = year.calculateMonthDay();
@@ -54,11 +55,14 @@ pub const Date = struct {
         return .{
 
             .year = year.year,
+
             .month = date.month.numeric(),
             .day = @as(u8, date.day_index) + 1,
+
             .hour = time.getHoursIntoDay(),
             .minute = time.getMinutesIntoHour(),
             .second = time.getSecondsIntoMinute(),
+
             // 1970-01-01 was a Thursday.
             .weekday = @intCast((day.day + 4) % 7),
 

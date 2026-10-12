@@ -304,6 +304,7 @@ pub const Display = struct {
 
         const endpoint = try self.peer();
         var which: u64 = 0;
+
         var message = api.Request{
 
             .number = @intFromEnum(api.abi.Call.call),
@@ -370,6 +371,7 @@ pub const Display = struct {
             .height = @intCast(height),
 
         };
+
         var dimensions = [6]u32{ width, height, @bitCast(area.x), @bitCast(area.y), @bitCast(area.width), @bitCast(area.height) };
 
         _ = try self.request(.image, @intCast(handle), std.mem.asBytes(&dimensions));
@@ -435,6 +437,7 @@ pub const Display = struct {
     fn request(self: *Display, operation: protocol.Operation, value: u56, window: []u8) api.ServiceError!u64 {
 
         const endpoint = try self.peer();
+
         const result = api.exchange(endpoint, protocol.pack(operation, value), window) catch |err| {
 
             self.endpoint = 0;

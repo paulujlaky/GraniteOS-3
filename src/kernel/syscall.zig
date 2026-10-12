@@ -58,11 +58,13 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
 
             if (!task.policy.permits(.ipc)) return error.Denied;
             if (frame.first > 1) return error.Invalid;
+
             if (frame.first == 1) {
 
                 if (!ipc.poll(root.processes, task)) return error.NoProcess;
 
             } else ipc.receive(root.processes, task);
+
             frame.* = task.context.request();
             frame.number = 0;
 
@@ -176,6 +178,7 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
                 .uptime = ticks,
 
             };
+
             var cores = arch.machine.cores;
 
             while (cores) |core| : (cores = core.next) {
@@ -254,6 +257,7 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
         .inspect => {
 
             if (!task.permits(.manage, 0, 1)) return error.Denied;
+
             if (frame.first == 0) {
 
                 const image = std.enums.fromInt(abi.Image, frame.second) orelse return error.Invalid;

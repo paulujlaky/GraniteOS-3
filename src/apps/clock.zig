@@ -38,6 +38,7 @@ var tab_marks: [tab_titles.len]gui.Node = undefined;
 var tab_labels: [tab_titles.len]gui.Node = undefined;
 var tab_parts: [tab_titles.len][2]*gui.Node = undefined;
 var tab_list: [tab_titles.len]*gui.Node = undefined;
+
 var tabs = gui.box(theme.bar.with(.{
 
     .gap = 4,
@@ -50,8 +51,10 @@ var dial = gui.Figure{
     .paint = &face,
 
 };
+
 var dial_node: gui.Node = undefined;
 var digital_bytes: [16]u8 = undefined;
+
 var digital = gui.label("", .{
 
     .face = .mono,
@@ -59,13 +62,17 @@ var digital = gui.label("", .{
     .text_align = .center,
 
 });
+
 var date_bytes: [48]u8 = undefined;
+
 var date = gui.label("", theme.caption.with(.{
 
     .text_align = .center,
 
 }));
+
 var clock_parts = [_]*gui.Node{ &dial_node, &digital, &date };
+
 var clock_page = gui.box(.{
 
     .grow = 1,
@@ -130,19 +137,24 @@ var zone_label = gui.label("Your time zone", .{
     .grow = 1,
 
 });
+
 var zone_bytes: [16]u8 = undefined;
+
 var zone = gui.label("", .{
 
     .face = .mono,
     .size = theme.small,
 
 });
+
 var zone_down = gui.tool(.minimize, &zone_earlier);
 var zone_up = gui.tool(.plus, &zone_later);
 var zone_parts = [_]*gui.Node{ &zone_label, &zone, &zone_down, &zone_up };
+
 var zone_row = gui.box(theme.panel.with(.{
 
     .padding = gui.Edges.axes(4, theme.spacing),
+
     .direction = .row,
     .gap = 4,
     .items = .center,
@@ -159,6 +171,7 @@ var city_time_bytes: [cities.len][8]u8 = undefined;
 var city_parts: [cities.len][2]*gui.Node = undefined;
 var city_rows: [cities.len]gui.Node = undefined;
 var city_list: [cities.len]*gui.Node = undefined;
+
 var city_table = gui.box(.{
 
     .grow = 1,
@@ -166,7 +179,9 @@ var city_table = gui.box(.{
     .scroll = true,
 
 }, &city_list);
+
 var world_parts = [_]*gui.Node{ &zone_row, &city_table };
+
 var world_page = gui.box(.{
 
     .grow = 1,
@@ -186,6 +201,7 @@ var laps: [lap_most]u64 = undefined;
 var lap_count: usize = 0;
 
 var watch_bytes: [16]u8 = undefined;
+
 var watch = gui.label("00:00.00", .{
 
     .face = .mono,
@@ -193,9 +209,11 @@ var watch = gui.label("00:00.00", .{
     .text_align = .center,
 
 });
+
 var watch_go = gui.button("Start", &watch_toggle);
 var watch_lap = gui.button("Lap", &watch_mark);
 var watch_button_parts = [_]*gui.Node{ &watch_lap, &watch_go };
+
 var watch_buttons = gui.box(.{
 
     .direction = .row,
@@ -203,9 +221,11 @@ var watch_buttons = gui.box(.{
     .justify = .center,
 
 }, &watch_button_parts);
+
 var lap_rows: [lap_most]gui.Node = undefined;
 var lap_bytes: [lap_most][48]u8 = undefined;
 var lap_list: [lap_most]*gui.Node = undefined;
+
 var lap_table = gui.box(.{
 
     .grow = 1,
@@ -213,7 +233,9 @@ var lap_table = gui.box(.{
     .scroll = true,
 
 }, &lap_list);
+
 var watch_parts = [_]*gui.Node{ &watch, &watch_buttons, &lap_table };
+
 var watch_page = gui.box(.{
 
     .grow = 1,
@@ -238,9 +260,11 @@ var ring = gui.Figure{
     .paint = &progress,
 
 };
+
 var ring_node: gui.Node = undefined;
 var left_bytes: [16]u8 = undefined;
 var length_text_bytes: [16]u8 = undefined;
+
 var left_label = gui.label("05:00", .{
 
     .face = .mono,
@@ -248,42 +272,53 @@ var left_label = gui.label("05:00", .{
     .text_align = .center,
 
 });
+
 var length_bytes: [24]u8 = undefined;
+
 var length_label = gui.label("", theme.caption.with(.{
 
     .text_align = .center,
 
 }));
+
 var readout_parts = [_]*gui.Node{ &left_label, &length_label };
+
 var readout = gui.box(.{
 
     .gap = 2,
     .justify = .center,
 
 }, &readout_parts);
+
 var dial_stack_parts = [_]*gui.Node{ &ring_node, &readout };
+
 var dial_stack = gui.box(.{
 
     .grow = 1,
     .direction = .stack,
 
 }, &dial_stack_parts);
+
 var less = gui.tool(.minimize, &timer_less);
 var timer_go = gui.button("Start", &timer_toggle);
 var timer_reset = gui.button("Reset", &timer_clear);
 var more = gui.tool(.plus, &timer_more);
 var timer_button_parts = [_]*gui.Node{ &less, &timer_reset, &timer_go, &more };
+
 var timer_buttons = gui.box(.{
 
     .direction = .row,
     .gap = theme.gap,
+
     .justify = .center,
     .items = .center,
 
 }, &timer_button_parts);
+
 var preset_nodes: [presets.len]gui.Node = undefined;
 var preset_bytes: [presets.len][8]u8 = undefined;
 var preset_list: [presets.len]*gui.Node = undefined;
+
 var preset_row = gui.box(.{
 
     .direction = .row,
@@ -291,7 +326,9 @@ var preset_row = gui.box(.{
     .justify = .center,
 
 }, &preset_list);
+
 var timer_parts = [_]*gui.Node{ &dial_stack, &timer_buttons, &preset_row };
+
 var timer_page = gui.box(.{
 
     .grow = 1,
@@ -301,11 +338,13 @@ var timer_page = gui.box(.{
 }, &timer_parts);
 
 var pages = [_]*gui.Node{ &clock_page, &world_page, &watch_page, &timer_page };
+
 var page_box = gui.box(.{
 
     .grow = 1,
 
 }, &pages);
+
 var root_parts = [_]*gui.Node{ &tabs, &page_box };
 var root = gui.box(.{}, &root_parts);
 
@@ -326,6 +365,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         .grow = 1,
 
     });
+
     ring_node = gui.figure(&ring, .{
 
         .grow = 1,
@@ -335,20 +375,25 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     for (&tab_nodes, 0..) |*node, index| {
 
         tab_marks[index] = gui.icon(tab_icons[index], theme.icon);
+
         tab_labels[index] = gui.label(tab_titles[index], .{
 
             .size = theme.small,
 
         });
+
         tab_parts[index] = .{ &tab_marks[index], &tab_labels[index] };
+
         node.* = gui.box(theme.item.with(.{
 
             .grow = 1,
             .height = 32,
+
             .gap = 6,
             .justify = .center,
 
         }), &tab_parts[index]);
+
         node.action = &choose;
         node.data = index;
         tab_list[index] = node;
@@ -360,6 +405,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         city_names[index] = gui.label(city.name, .{});
         city_notes[index] = gui.label("", theme.caption);
         city_words[index] = .{ &city_names[index], &city_notes[index] };
+
         city_texts[index] = gui.box(.{
 
             .grow = 1,
@@ -367,18 +413,22 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             .justify = .center,
 
         }, &city_words[index]);
+
         city_times[index] = gui.label("", .{
 
             .face = .mono,
             .size = 22,
 
         });
+
         city_parts[index] = .{ &city_texts[index], &city_times[index] };
+
         city_rows[index] = gui.box(theme.item.with(.{
 
             .height = 52,
 
         }), &city_parts[index]);
+
         city_list[index] = &city_rows[index];
 
     }
@@ -392,6 +442,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             .size = theme.small,
 
         }));
+
         row.hidden = true;
         lap_list[index] = row;
 
@@ -400,12 +451,14 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     for (presets, 0..) |minutes, index| {
 
         preset_nodes[index] = gui.button(std.fmt.bufPrint(&preset_bytes[index], "{d}m", .{minutes}) catch "", &preset);
+
         preset_nodes[index].style = preset_nodes[index].style.with(.{
 
             .padding = gui.Edges.axes(0, 10),
             .size = theme.small,
 
         });
+
         preset_nodes[index].data = minutes;
         preset_list[index] = &preset_nodes[index];
 
@@ -413,16 +466,19 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
     timer_go.style = theme.primary;
     watch_go.style = theme.primary;
+
     watch_lap.style = watch_lap.style.with(.{
 
         .width = 96,
 
     });
+
     watch_go.style = watch_go.style.with(.{
 
         .width = 96,
 
     });
+
     for (&pages, 0..) |page, index| page.hidden = index != 0;
     tab_nodes[0].selected = true;
 
@@ -430,6 +486,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Clock",
         .application = .clock,
+
         .width = 400,
         .height = 520,
 
@@ -586,6 +643,7 @@ fn world_fill(seconds: u64) void {
         const day = if (there.day == today.day) "Today" else if (there.year > today.year or (there.year == today.year and (there.month > today.month or (there.month == today.month and there.day > today.day)))) "Tomorrow" else "Yesterday";
 
         city_times[index].content.label = std.fmt.bufPrint(&city_time_bytes[index], "{d:0>2}:{d:0>2}", .{ there.hour, there.minute }) catch "";
+
         city_notes[index].content.label = if (difference == 0) std.fmt.bufPrint(&city_note_bytes[index], "{s}, same time", .{day}) catch "" else std.fmt.bufPrint(&city_note_bytes[index], "{s}, {s}{d}{s} h", .{
 
             day,
@@ -696,6 +754,7 @@ fn save() void {
     const line = std.fmt.bufPrint(&line_bytes, "offset={d}\n", .{offset}) catch return;
 
     files.create(path) catch return;
+
     files.write(path, 0, line) catch {
 
     };

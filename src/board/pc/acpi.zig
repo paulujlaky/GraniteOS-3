@@ -3,6 +3,7 @@ const std = @import("std");
 const boot = @import("../../boot/info.zig");
 
 pub const AcpiError = error{ MissingAcpi, InvalidAcpi, MissingMadt, UnsupportedApic };
+
 pub const Acpi = struct {
 
     regions: []const boot.Region,

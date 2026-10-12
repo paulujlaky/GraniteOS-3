@@ -175,6 +175,7 @@ pub export fn app_main(_: usize, base: usize, environment: *const api.abi.Enviro
     if (!api.permits(.dma) or api.permits(.ports) or api.permits(.management)) api.exit(2);
 
     registers = @intFromPtr(api.map(base, size) catch api.exit(3));
+
     start() catch {
 
         api.log("usb: the controller did not start\n");
@@ -334,6 +335,7 @@ fn scan() void {
                 }) catch {
 
                 };
+
                 spot.* = null;
 
             };
@@ -347,6 +349,7 @@ fn scan() void {
         if (seen[port]) continue;
 
         seen[port] = true;
+
         attach(@intCast(port), register) catch |err| {
 
             var line: [64]u8 = undefined;
@@ -373,11 +376,13 @@ fn attach(port: u8, register: usize) !void {
     }
 
     const speed = read(register) >> 10 & 0xf;
+
     const answer = try command(.{
 
         .control = enable << 10,
 
     });
+
     const slot: u8 = @intCast(answer.control >> 24);
 
     if (slot == 0 or slot > slots) return error.NoSlot;
@@ -397,6 +402,7 @@ fn attach(port: u8, register: usize) !void {
     entry(input, 0)[1] = 0b11;
     entry(input, 1)[0] = speed << 20 | 1 << 27;
     entry(input, 1)[1] = @as(u32, port) << 16;
+
     endpoint(entry(input, 2), 4, switch (speed) {
 
         3 => 64,
@@ -419,6 +425,7 @@ fn attach(port: u8, register: usize) !void {
 
         entry(input, 0)[1] = 0b10;
         endpoint(entry(input, 2), 4, buffer.bytes[7], 0, control.page.physical);
+
         _ = try command(.{
 
             .parameter = input.physical,
@@ -433,6 +440,7 @@ fn attach(port: u8, register: usize) !void {
 
     const found = hid.find(buffer.bytes[0..@min(std.mem.readInt(u16, buffer.bytes[2..4], .little), 1024)]) orelse return error.NotInput;
     const target: u8 = (found.endpoint & 0xf) * 2 + 1;
+
     const index = for (&devices, 0..) |*spot, at| {
 
         if (spot.* == null) break at;
@@ -451,6 +459,7 @@ fn attach(port: u8, register: usize) !void {
     const interval: u32 = if (speed >= 3) std.math.clamp(found.interval, 1, 16) - 1 else std.math.clamp(std.math.log2_int(u32, @as(u32, @max(found.interval, 1)) * 8), 3, 10);
 
     endpoint(entry(input, target + 1), 7, found.size, interval, ring.page.physical);
+
     _ = try command(.{
 
         .parameter = input.physical,
@@ -468,6 +477,7 @@ fn attach(port: u8, register: usize) !void {
         request(slot, &control, buffer, 0x81, 6, 0x2200, found.interface, length) catch {
 
         };
+
         described = hid.layout(buffer.bytes[0..length]);
 
     }
@@ -476,6 +486,7 @@ fn attach(port: u8, register: usize) !void {
 
     // Only on change, as a PS/2 device would send them; a device without the boot subclass may refuse to switch, keeping its own reports.
     request(slot, &control, buffer, 0x21, 0x0b, if (described == null) 0 else 1, found.interface, 0) catch if (described == null) return error.NotBoot;
+
     request(slot, &control, buffer, 0x21, 0x0a, 0, found.interface, 0) catch {
 
     };
@@ -495,13 +506,17 @@ fn attach(port: u8, register: usize) !void {
         .slot = slot,
         .port = port,
         .kind = found.kind,
+
         .target = target,
         .size = @min(found.size, 64),
+
         .ring = ring,
         .buffers = reports,
+
         .layout = described,
 
     };
+
     ring_doorbell(slot, target);
 
     var line: [64]u8 = undefined;
@@ -690,6 +705,7 @@ fn report(event: Trb) void {
         .control = normal << 10 | notify | short,
 
     });
+
     ring_doorbell(device.slot, device.target);
 
 }

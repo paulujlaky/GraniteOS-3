@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const line = @import("line.zig");
+const release = @import("release.zig");
 
 const api = @import("api");
 
@@ -122,9 +123,11 @@ const groups = [_]Group{
 };
 
 var terminal: api.Terminal = undefined;
+
 var files = api.Files{
 
 };
+
 var accounts = api.Accounts{
 
 };
@@ -132,9 +135,11 @@ var accounts = api.Accounts{
 var cwd: [200]u8 = undefined;
 var cwd_length: usize = 1;
 var target: [line.capacity + cwd.len]u8 = undefined;
+
 var editor = line.Line{
 
 };
+
 var shown: []const u8 = "";
 var mode: Mode = .command;
 
@@ -151,6 +156,7 @@ var served: u64 = 0;
 pub export fn app_main(parent: usize, supervisor: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
 
     api.start(environment, .application);
+
     terminal = .{
 
         .supervisor = supervisor,
@@ -210,6 +216,7 @@ fn serve() void {
 
     served += 1;
     const result = if (protocol.operation(request.second) == .ping) served else protocol.invalid;
+
     api.reply(request, result) catch {
 
     };
@@ -447,6 +454,7 @@ fn complete() void {
     }
 
     show("\n");
+
     for (groups) |group| {
 
         for (group.commands) |entry| {
@@ -519,22 +527,14 @@ fn about(_: []const u8) Error!void {
         \\/ /_/ / /  / /_/ / / / / / /_/  __/ /_/ /___/ /   ___/ /
         \\\____/_/   \__,_/_/ /_/_/\__/\___/\____//____/   /____/
         \\
-        \\A practical, everyday operating system written in Zig.
-        \\
-        \\Features:
-        \\  - x86_64 UEFI boot
-        \\  - Preemptive multicore scheduling
-        \\  - Isolated processes with kernel-enforced permissions
-        \\  - Supervised services with crash recovery
-        \\  - Serial terminal and OBSIDIAN shell
-        \\  - SATA storage and persistent files
-        \\  - Accounts, private homes, and file permissions
-        \\  - Installation beside an existing OS
-        \\
-        \\Type 'help' to see available commands.
-        \\
         \\
     );
+
+    try terminal.print("{s}\n\nFeatures:\n", .{release.tagline});
+
+    for (release.features) |feature| try terminal.print("  - {s}\n", .{feature});
+
+    try terminal.write("\nType 'help' to see available commands.\n\n");
 
 }
 

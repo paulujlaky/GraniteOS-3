@@ -2,7 +2,6 @@
 
 const std = @import("std");
 
-
 const api = @import("api");
 const gui = @import("gui");
 
@@ -36,6 +35,7 @@ const Toast = struct {
 
 var toasts: [most]Toast = undefined;
 var list: [most]*gui.Node = undefined;
+
 var root = gui.box(.{
 
     .gap = gap,
@@ -57,9 +57,11 @@ pub fn init(screen: gui.Rect, top: i32) void {
             .size = 18,
 
         }));
+
         toast.title = gui.label("", .{});
         toast.detail = gui.label("", theme.caption);
         toast.words = .{ &toast.title, &toast.detail };
+
         toast.text = gui.box(.{
 
             .grow = 1,
@@ -67,11 +69,15 @@ pub fn init(screen: gui.Rect, top: i32) void {
             .justify = .center,
 
         }, &toast.words);
+
         toast.parts = .{ &toast.icon, &toast.text };
+
         toast.node = gui.box(theme.popup.with(.{
 
             .height = tall,
+
             .padding = gui.Edges.axes(0, theme.spacing),
+
             .direction = .row,
             .gap = theme.spacing,
             .items = .center,
@@ -83,6 +89,7 @@ pub fn init(screen: gui.Rect, top: i32) void {
             },
 
         }), &toast.parts);
+
         toast.node.action = &dismiss;
         toast.node.data = index;
         toast.node.hidden = true;
@@ -93,8 +100,10 @@ pub fn init(screen: gui.Rect, top: i32) void {
     window = gui.Window.open(&root, .{
 
         .layer = .panel,
+
         .width = width,
         .height = tall,
+
         .hidden = true,
         .motion = .drop,
 
@@ -113,6 +122,7 @@ pub fn place(screen: gui.Rect, top: i32) void {
         .y = top + gap,
 
     };
+
     fit();
 
 }
@@ -192,10 +202,12 @@ fn fit() void {
 
         .x = corner.x,
         .y = corner.y,
+
         .width = width,
         .height = count * tall + (count - 1) * gap,
 
     });
+
     window.show();
 
 }

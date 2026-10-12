@@ -40,14 +40,17 @@ pub const Dialog = struct {
             .buffer = &self.bytes,
 
         };
+
         self.field = root.input(&self.edit);
         self.field.action = &accept;
         self.actions = .{ &self.cancel, &self.confirm };
+
         self.row = root.box(.{
 
             .direction = .row,
             .gap = theme.gap,
             .justify = .end,
+
             .padding = .{
 
                 .top = theme.gap / 2,
@@ -55,6 +58,7 @@ pub const Dialog = struct {
             },
 
         }, &self.actions);
+
         self.parts = .{ &self.heading, &self.detail, &self.field, &self.row };
         self.card = root.box(theme.card, &self.parts);
         self.card.data = @intFromPtr(self);

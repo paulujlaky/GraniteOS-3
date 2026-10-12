@@ -56,6 +56,7 @@ test "font kerns letter pairs from its table and measures with them" {
 test "canvas clips fills, rounds corners, and blits only the overlap" {
 
     var pixels = [_]u32{0} ** (32 * 24);
+
     var target = canvas.Canvas{
 
         .pixels = &pixels,
@@ -78,6 +79,7 @@ test "canvas clips fills, rounds corners, and blits only the overlap" {
     try std.testing.expect(pixels[2 * 32 + 31] != 0xffffff);
 
     var small = [_]u32{0x123456} ** (4 * 4);
+
     const source = canvas.Canvas{
 
         .pixels = &small,
@@ -116,6 +118,7 @@ test "flex layout grows, centres, and stretches children and reports what moved"
         },
 
     };
+
     var grown = node.Node{
 
         .style = .{
@@ -125,11 +128,13 @@ test "flex layout grows, centres, and stretches children and reports what moved"
         },
 
     };
+
     var hidden = node.Node{
 
         .hidden = true,
 
     };
+
     var row = node.Node{
 
         .style = .{
@@ -147,6 +152,7 @@ test "flex layout grows, centres, and stretches children and reports what moved"
         },
 
     };
+
     var damage = canvas.Rect{};
 
     row.arrange(.{
@@ -177,6 +183,7 @@ test "flex layout grows, centres, and stretches children and reports what moved"
     };
 
     damage = .{};
+
     column.arrange(.{
 
         .width = 100,
@@ -200,6 +207,7 @@ test "text wraps after spaces and moves the caret between wrapped lines" {
     try std.testing.expectEqual(null, lines.next());
 
     var bytes = "hello world\nx".*;
+
     var edit = text.Text{
 
         .buffer = &bytes,
@@ -219,6 +227,7 @@ test "text wraps after spaces and moves the caret between wrapped lines" {
 test "recorded commands replay exactly as direct drawing and survive hostile bytes" {
 
     var bytes: [1024]u8 align(4) = undefined;
+
     var list = draw.List{
 
         .bytes = &bytes,
@@ -228,6 +237,7 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
     };
 
     list.fill(list.bounds(), 0x202020);
+
     list.limit = .{
 
         .x = 2,
@@ -235,6 +245,7 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
         .height = 20,
 
     };
+
     list.round(.{
 
         .x = -4,
@@ -243,10 +254,12 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
         .height = 20,
 
     }, 8, 0xffffff);
+
     list.label("Hi", .sans, 16, list.bounds(), 0x000000, .center);
 
     var direct = [_]u32{0} ** (32 * 24);
     var replayed = [_]u32{0} ** (32 * 24);
+
     var expected = canvas.Canvas{
 
         .pixels = &direct,
@@ -254,6 +267,7 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
         .height = 24,
 
     };
+
     var actual = canvas.Canvas{
 
         .pixels = &replayed,
@@ -264,6 +278,7 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
 
     expected.fill(expected.bounds(), 0x202020);
     expected.limit = list.limit;
+
     expected.round(.{
 
         .x = -4,
@@ -272,6 +287,7 @@ test "recorded commands replay exactly as direct drawing and survive hostile byt
         .height = 20,
 
     }, 8, 0xffffff);
+
     expected.label(font.sans(), "Hi", 16, expected.bounds(), 0x000000, .center);
     draw.replay(&actual, list.commands(), .{}, actual.bounds(), null);
 
@@ -301,6 +317,7 @@ test "translucent backgrounds keep their transparency through recording, stackin
         },
 
     };
+
     var dim = node.Node{
 
         .style = .{
@@ -310,6 +327,7 @@ test "translucent backgrounds keep their transparency through recording, stackin
         },
 
     };
+
     var stack = node.Node{
 
         .style = .{
@@ -324,8 +342,10 @@ test "translucent backgrounds keep their transparency through recording, stackin
         },
 
     };
+
     var damage = canvas.Rect{};
     var bytes: [1024]u8 align(4) = undefined;
+
     var list = draw.List{
 
         .bytes = &bytes,
@@ -347,6 +367,7 @@ test "translucent backgrounds keep their transparency through recording, stackin
     try std.testing.expectEqual(0x7f000000, colors[1]);
 
     var pixels = [_]u32{0} ** 64;
+
     var target = canvas.Canvas{
 
         .pixels = &pixels,
@@ -364,6 +385,7 @@ test "stacked children share the container and scrolled ones slide by its offset
 
     var under = node.Node{};
     var over = node.Node{};
+
     var stack = node.Node{
 
         .style = .{
@@ -379,6 +401,7 @@ test "stacked children share the container and scrolled ones slide by its offset
         },
 
     };
+
     var damage = canvas.Rect{};
 
     stack.arrange(.{
@@ -405,6 +428,7 @@ test "stacked children share the container and scrolled ones slide by its offset
             },
 
         };
+
         child.* = row;
 
     }
@@ -424,6 +448,7 @@ test "stacked children share the container and scrolled ones slide by its offset
         .offset = 80,
 
     };
+
     const area = canvas.Rect{
 
         .width = 40,
@@ -453,6 +478,7 @@ test "stacked children share the container and scrolled ones slide by its offset
 test "text selections extend, replace, erase, and snap to words" {
 
     var bytes: [32]u8 = undefined;
+
     var edit = text.Text{
 
         .buffer = &bytes,
@@ -485,6 +511,7 @@ test "text selections extend, replace, erase, and snap to words" {
 test "style changes reach into nested colours and keep the rest of the base" {
 
     const style = @import("style.zig");
+
     const base = style.Style{
 
         .radius = 4,
@@ -496,6 +523,7 @@ test "style changes reach into nested colours and keep the rest of the base" {
         },
 
     };
+
     const changed = base.with(.{
 
         .width = 10,
@@ -537,6 +565,7 @@ test "UTF-8 text decodes leniently, keeps the caret on whole characters, and dra
     try std.testing.expect(accented_ink > ink * 1.05);
 
     var bytes = "\u{e9}\u{e9}\n\u{e9}\u{e9}".*;
+
     var edit = text.Text{
 
         .buffer = &bytes,
@@ -553,6 +582,7 @@ test "UTF-8 text decodes leniently, keeps the caret on whole characters, and dra
 test "sketches cover anti-aliased discs, lines, arcs, and outlines, and skip glyphs outside a canvas's limit" {
 
     var pixels = [_]u32{0} ** (32 * 32);
+
     var target = sketch.Sketch{
 
         .pixels = &pixels,
@@ -587,6 +617,7 @@ test "sketches cover anti-aliased discs, lines, arcs, and outlines, and skip gly
 
     // Text wholly outside the limit draws nothing, as when only a window's corner is redrawn.
     var screen = [_]u32{0} ** (64 * 64);
+
     var surface = canvas.Canvas{
 
         .pixels = &screen,
@@ -604,6 +635,7 @@ test "sketches cover anti-aliased discs, lines, arcs, and outlines, and skip gly
 test "recorded shapes, curves, and shadows replay where a sketch would paint them" {
 
     var bytes: [4096]u8 align(4) = undefined;
+
     var list = draw.List{
 
         .bytes = &bytes,
@@ -611,6 +643,7 @@ test "recorded shapes, curves, and shadows replay where a sketch would paint the
         .height = 48,
 
     };
+
     var recorder = sketch.Sketch{
 
         .width = 40,
@@ -624,6 +657,7 @@ test "recorded shapes, curves, and shadows replay where a sketch would paint the
         },
 
     };
+
     const points = [_][2]f32{ .{ 2, 30 }, .{ 20, 10 }, .{ 38, 20 } };
 
     recorder.disc(20, 20, 9.5, 0xffffff);
@@ -631,6 +665,7 @@ test "recorded shapes, curves, and shadows replay where a sketch would paint the
     recorder.curve(&points, 2, 0x00ff00, null);
 
     var screen = [_]u32{0} ** (48 * 48);
+
     var target = canvas.Canvas{
 
         .pixels = &screen,
@@ -649,6 +684,7 @@ test "recorded shapes, curves, and shadows replay where a sketch would paint the
 
     // A shadow darkens towards its edge and leaves its middle to whatever casts it.
     @memset(&screen, 0xffffff);
+
     target.shadow(.{
 
         .x = 8,
@@ -676,6 +712,7 @@ test "labels keep descenders inside a box one line tall and stay centred in tall
             .height = text.leading(face, size),
 
         };
+
         const start = canvas.anchor(face, "gyp", size, line, .left);
         const descent = @as(f32, @floatFromInt(@abs(face.descent))) * size / face.units;
 
@@ -690,6 +727,7 @@ test "labels keep descenders inside a box one line tall and stay centred in tall
         .height = 32,
 
     };
+
     const capital = @as(f32, @floatFromInt(face.capital)) * 15 / face.units;
 
     try std.testing.expectEqual(@as(i32, @intFromFloat(@round((32 + capital) / 2))), canvas.anchor(face, "Save", 15, button, .center).y);

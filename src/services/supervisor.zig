@@ -57,6 +57,7 @@ pub export fn app_main(restored: usize, _: usize, environment: *const api.abi.En
     while (true) {
 
         maintain();
+
         const request = api.receive(false) catch {
 
             api.sleep(1);
@@ -65,6 +66,7 @@ pub export fn app_main(restored: usize, _: usize, environment: *const api.abi.En
         };
 
         const result = handle(request);
+
         api.reply(request, result) catch {
 
         };
@@ -114,9 +116,11 @@ fn maintain() void {
         }
 
         entry.id = child.first;
+
         if (!image.application()) {
 
             const version = api.call(entry.id, protocol.pack(.hello, 0)) catch protocol.invalid;
+
             if (version != protocol.version) {
 
                 _ = api.raw(.stop, entry.id, 0, 0);
@@ -207,6 +211,7 @@ fn launch(request: api.Request) u64 {
     // It may call its launcher back, and its session, such as to show a notification.
     _ = api.raw(.connect, id, request.first, 0);
     if (session != request.first) _ = api.raw(.connect, id, session, 0);
+
     app.* = .{
 
         .id = id,
@@ -214,6 +219,7 @@ fn launch(request: api.Request) u64 {
         .length = detail.len,
 
     };
+
     @memcpy(app.argument[0..detail.len], detail);
 
     return id;

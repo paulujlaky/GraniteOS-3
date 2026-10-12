@@ -22,6 +22,7 @@ pub fn prepare(log: Log) !*const boot.Info {
     const info_bytes = try services.allocatePool(.loader_data, @sizeOf(boot.Info));
     const info: *boot.Info = @ptrCast(@alignCast(info_bytes.ptr));
     const stack = try services.allocatePages(.any, .loader_data, 16);
+
     const trampoline = try services.allocatePages(.{
 
         .max_address = @ptrFromInt(0xff000),
@@ -48,6 +49,7 @@ pub fn prepare(log: Log) !*const boot.Info {
             .kind = .loader,
 
         },
+
         .framebuffer = try graphics.capture(services),
         .acpi_rsdp = findAcpi(table),
         .trampoline = @intFromPtr(trampoline.ptr),
@@ -94,6 +96,7 @@ fn copy(services: *uefi.tables.BootServices, loaded: *const uefi.protocol.Loaded
         const length = std.mem.readInt(u16, node[2..4], .little);
 
         if (length < 4) return null;
+
         if (node[0] == 4 and node[1] == 4) {
 
             if (length < 6 or (length - 4) / 2 > path.len) return null;

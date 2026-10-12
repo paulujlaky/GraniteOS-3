@@ -11,6 +11,7 @@ pub export fn app_main(_: usize, parent: usize, environment: *const api.abi.Envi
     var forged = environment.*;
     forged.layer = .service;
     forged.length = api.abi.permission_count;
+
     forged.permissions = .{
 
         .ipc, .memory, .time, .ports, .mmio, .power, .diagnostics, .management, .dma, .accounts, .firmware
@@ -21,6 +22,7 @@ pub export fn app_main(_: usize, parent: usize, environment: *const api.abi.Envi
     if (api.raw(.port, 0x2f8, 0, 0).number != 1 or api.raw(.spawn, 0, 0, 0).number != 1) api.exit(3);
     api.start(environment, .application);
     supervisor = parent;
+
     run() catch {
 
         _ = api.call(supervisor, protocol.pack(.failed, 0)) catch {
@@ -63,6 +65,7 @@ fn run() !void {
     const serial = try discover(.serial, 0);
     try expect(try api.call(helper, protocol.pack(.ping, 41)) == 42);
     try expect(try api.call(helper, protocol.pack(.ping, ~@as(u56, 0))) == @as(u64, 1) << 56);
+
     if (api.call(helper, protocol.pack(.stall, 0))) |_| {
 
         return error.ExpectedTimeout;
@@ -134,10 +137,12 @@ fn desktop() !void {
         .buffer = &bytes,
 
     };
+
     var field = gui.input(&text);
     var button = gui.button("OK", &ignore);
     var children = [_]*gui.Node{ &field, &button };
     var root = gui.box(gui.theme.panel, &children);
+
     var window = try gui.Window.open(&root, .{
 
         .title = "Self-test",

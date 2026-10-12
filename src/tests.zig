@@ -196,9 +196,11 @@ test "framebuffer rejects short storage bad stride and overlapping channels" {
 
         .base = 0xe0000000,
         .size = 1920 * 1080 * 4,
+
         .width = 1920,
         .height = 1080,
         .stride = 1920,
+
         .red_mask = 0xff0000,
         .green_mask = 0xff00,
         .blue_mask = 0xff,

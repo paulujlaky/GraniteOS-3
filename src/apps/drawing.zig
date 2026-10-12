@@ -15,6 +15,7 @@ const control = api.Event.Modifiers{
     .control = true,
 
 };
+
 const control_shift = api.Event.Modifiers{
 
     .shift = true,
@@ -52,6 +53,7 @@ const page = gui.Rect{
     .height = 520,
 
 };
+
 const largest = 4096;
 
 /// Changes kept for undoing.
@@ -126,14 +128,18 @@ var canvas = gui.custom(&paint, .{
     .padding = .all(theme.spacing),
 
 });
+
 var status_bytes: [64]u8 = undefined;
+
 var status = gui.label("", theme.caption.with(.{
 
     .grow = 1,
 
 }));
+
 var name_label = gui.label("", theme.caption);
 var footer_parts = [_]*gui.Node{ &status, &name_label };
+
 var footer = gui.box(.{
 
     .height = 28,
@@ -144,7 +150,9 @@ var footer = gui.box(.{
     .background = theme.raised,
 
 }, &footer_parts);
+
 var parts = [_]*gui.Node{ &bar, &canvas, &footer };
+
 var root = gui.box(.{
 
     .background = 0x101010,
@@ -173,6 +181,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Drawing",
         .application = .drawing,
+
         .width = 900,
         .height = 640,
 
@@ -238,6 +247,7 @@ fn build() void {
             },
 
         }, &.{});
+
         node.action = &choose_color;
         node.data = index;
         bar_list[count] = node;
@@ -261,13 +271,16 @@ fn build() void {
             .radius = @divTrunc(across, 2),
 
         }, &.{});
+
         size_dot_parts[index] = .{&size_dots[index]};
+
         node.* = gui.box(theme.tool.with(.{
 
             .justify = .center,
             .items = .center,
 
         }), &size_dot_parts[index]);
+
         node.action = &choose_size;
         node.data = index;
         bar_list[count] = node;
@@ -430,6 +443,7 @@ fn paint(node: *gui.Node, target: *gui.List) void {
 fn drag(node: *gui.Node, track: gui.Track) void {
 
     const area = placed(node.inner());
+
     const point = [2]f32{
 
         (@as(f32, @floatFromInt(track.at.x - area.x)) + 0.5) * @as(f32, @floatFromInt(picture.width)) / @as(f32, @floatFromInt(@max(area.width, 1))),
@@ -514,6 +528,7 @@ fn extend(point: [2]f32) void {
             clear_preview();
             previewed = shape(&layer, start, point);
             last = point;
+
             preview.change(if (before) |old| old.join(previewed.?) else previewed) catch {
 
             };
@@ -536,9 +551,11 @@ fn end(point: [2]f32) void {
         clear_preview();
         previewed = null;
         dirty = shape(&sketch, start, point);
+
         preview.change(before) catch {
 
         };
+
         show(dirty);
 
     }
@@ -739,6 +756,7 @@ fn commit() void {
 
     const count: usize = @intCast(area.width * area.height);
     const before = api.pages.alloc(u32, count) catch return;
+
     const after = api.pages.alloc(u32, count) catch {
 
         api.pages.free(before);
@@ -767,6 +785,7 @@ fn commit() void {
         .after = after,
 
     };
+
     step_count += 1;
     position = step_count;
     dirty = null;

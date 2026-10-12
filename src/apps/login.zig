@@ -53,13 +53,16 @@ var count: usize = 0;
 var selected: usize = 0;
 
 var name_bytes: [64]u8 = undefined;
+
 var name_text = gui.Text{
 
     .buffer = &name_bytes,
     .placeholder = "Administrator name",
 
 };
+
 var password_bytes: [64]u8 = undefined;
+
 var password_text = gui.Text{
 
     .buffer = &password_bytes,
@@ -84,17 +87,20 @@ var minute: u64 = std.math.maxInt(u64);
 var backdrop = gui.picture(&desktop.backdrop, .{
 
 });
+
 var dim = gui.box(.{
 
     .background = gui.shade(0x000000, 150),
 
 }, &.{});
+
 var time = gui.label("", .{
 
     .size = 76,
     .text_align = .center,
 
 });
+
 var date = gui.label("", .{
 
     .size = 18,
@@ -102,46 +108,57 @@ var date = gui.label("", .{
     .text_align = .center,
 
 });
+
 // Labels keep to one line, so the greeting takes two to fit the form.
 var welcome = gui.label("Welcome to GraniteOS.", theme.caption.with(.{
 
     .text_align = .center,
 
 }));
+
 var instruction = gui.label("Create the administrator account to begin.", theme.caption.with(.{
 
     .text_align = .center,
 
 }));
+
 var greeting_parts = [_]*gui.Node{ &welcome, &instruction };
+
 var greeting = gui.box(.{
 
     .gap = 2,
 
 }, &greeting_parts);
+
 var users = gui.box(.{
 
     .gap = 4,
 
 }, &list);
+
 var hint = gui.label("", theme.caption.with(.{
 
     .text_align = .center,
 
 }));
+
 var form_parts = [_]*gui.Node{ &greeting, &name, &users, &password, &hint };
+
 var form = gui.box(.{
 
     .width = 320,
     .gap = theme.spacing,
 
 }, &form_parts);
+
 var spacer = gui.box(.{
 
     .height = 40,
 
 }, &.{});
+
 var center_parts = [_]*gui.Node{ &time, &date, &spacer, &form };
+
 var center = gui.box(.{
 
     .justify = .center,
@@ -149,7 +166,9 @@ var center = gui.box(.{
     .gap = 6,
 
 }, &center_parts);
+
 var screen_parts = [_]*gui.Node{ &backdrop, &dim, &center };
+
 var screen = gui.box(.{
 
     .direction = .stack,
@@ -164,12 +183,15 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
     for (&rows, 0..) |*row, index| {
 
         avatars[index] = gui.label("", avatar);
+
         labels[index] = gui.label("", .{
 
             .grow = 1,
 
         });
+
         parts[index] = .{ &avatars[index], &labels[index] };
+
         row.* = gui.box(theme.item.with(.{
 
             .height = 50,
@@ -185,6 +207,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             },
 
         }), &parts[index]);
+
         row.data = index;
         list[index] = row;
 
@@ -192,19 +215,23 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
     name.action = &advance;
     password.action = &submit;
+
     password.style = password.style.with(.{
 
         .height = 40,
 
     });
+
     name.style = password.style;
 
     desktop.init();
+
     greeter = gui.Window.open(&screen, .{
 
         .layer = .overlay,
 
     }) catch api.exit(3);
+
     load();
     sync();
 
@@ -271,6 +298,7 @@ fn sync() void {
     name.hidden = state != .setup;
     greeting.hidden = state != .setup;
     users.hidden = state == .setup;
+
     hint.content.label = switch (state) {
 
         .setup => "",
@@ -432,9 +460,11 @@ pub fn logout() void {
     api.end() catch {
 
     };
+
     accounts.logout() catch {
 
     };
+
     desktop.stop();
     load();
     sync();

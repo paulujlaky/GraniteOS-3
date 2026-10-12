@@ -170,11 +170,13 @@ const Memory = struct {
 test "volume persists fragmented files and directories and reclaims every block" {
 
     const allocator = std.testing.allocator;
+
     const disk = Memory{
 
         .bytes = try allocator.alloc(u8, 8 << 20),
 
     };
+
     defer allocator.free(disk.bytes);
     @memset(disk.bytes, 0);
 
@@ -269,11 +271,13 @@ test "volume persists fragmented files and directories and reclaims every block"
 test "volume enforces owner and other permissions" {
 
     const allocator = std.testing.allocator;
+
     const disk = Memory{
 
         .bytes = try allocator.alloc(u8, 2 << 20),
 
     };
+
     defer allocator.free(disk.bytes);
     @memset(disk.bytes, 0);
 
@@ -286,6 +290,7 @@ test "volume enforces owner and other permissions" {
         .sectors = disk.bytes.len / 512,
 
     });
+
     try mounted.create("/home", .directory);
     try mounted.create("/home/alice", .directory);
     try mounted.change("/home/alice", 0o700, 1000);
@@ -323,11 +328,13 @@ test "GPT edit fills the largest aligned gap and keeps both tables valid" {
 
     const allocator = std.testing.allocator;
     const sectors = 65536;
+
     const disk = Memory{
 
         .bytes = try allocator.alloc(u8, sectors * 512),
 
     };
+
     defer allocator.free(disk.bytes);
     @memset(disk.bytes, 0);
 
@@ -394,11 +401,13 @@ test "FAT32 writer fills only free clusters and survives fragmentation and rewri
     const allocator = std.testing.allocator;
     const base = 64;
     const total = 4096;
+
     const disk = Memory{
 
         .bytes = try allocator.alloc(u8, (base + total) * 512),
 
     };
+
     defer allocator.free(disk.bytes);
     @memset(disk.bytes, 0);
 

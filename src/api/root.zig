@@ -445,6 +445,7 @@ fn entropy() u64 {
     for (0..10) |_| {
 
         var ready: u8 = undefined;
+
         const value = asm volatile ("rdrand %[value]; setc %[ready]" // Draw from the hardware generator.
             : [value] "=r" (-> u64),
               [ready] "=r" (ready),

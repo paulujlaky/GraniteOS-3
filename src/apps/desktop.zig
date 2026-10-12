@@ -59,6 +59,7 @@ var surfaces: [10]*gui.Window = undefined;
 
 /// The picture behind everything, shared with the lock screen.
 pub var backdrop: gui.Image = undefined;
+
 var scenery = gui.picture(&backdrop, .{
 
     .grow = 1,
@@ -69,34 +70,43 @@ var files = api.Files{};
 
 // Top bar.
 var apps_icon = gui.icon(.grid, theme.icon);
+
 var apps_label = gui.label("Apps", .{
 
     .size = theme.small,
 
 });
+
 var apps_parts = [_]*gui.Node{ &apps_icon, &apps_label };
 var apps = gui.box(chip, &apps_parts);
+
 var title = gui.label("", .{
 
     .grow = 1,
     .size = theme.small,
 
 });
+
 var time_bytes: [32]u8 = undefined;
+
 var time = gui.label("", .{
 
     .size = theme.small,
 
 });
+
 var user_icon = gui.icon(.user, theme.icon);
+
 var user_label = gui.label("", .{
 
     .size = theme.small,
 
 });
+
 var user_parts = [_]*gui.Node{ &user_icon, &user_label };
 var user = gui.box(chip, &user_parts);
 var bar_parts = [_]*gui.Node{ &apps, &title, &time, &user };
+
 var bar_root = gui.box(.{
 
     .padding = .axes(0, 4),
@@ -116,6 +126,7 @@ var marker_parts: [catalog.apps.len][1]*gui.Node = undefined;
 var slots: [catalog.apps.len]gui.Node = undefined;
 var slot_parts: [catalog.apps.len][2]*gui.Node = undefined;
 var dock_parts: [catalog.apps.len]*gui.Node = undefined;
+
 var dock_root = gui.box(.{
 
     .padding = .all(margin),
@@ -131,12 +142,14 @@ var dock_root = gui.box(.{
 
 // Launcher: a search field over the apps that match it.
 var search_bytes: [64]u8 = undefined;
+
 var search_text = gui.Text{
 
     .buffer = &search_bytes,
     .placeholder = "Search apps",
 
 };
+
 var search = gui.input(&search_text);
 var searched: u64 = 0;
 var entries: [catalog.apps.len]gui.Node = undefined;
@@ -147,6 +160,7 @@ var entry_texts: [catalog.apps.len]gui.Node = undefined;
 var entry_text_parts: [catalog.apps.len][2]*gui.Node = undefined;
 var entry_parts: [catalog.apps.len][2]*gui.Node = undefined;
 var list_parts: [catalog.apps.len]*gui.Node = undefined;
+
 var list = gui.box(.{
 
     .grow = 1,
@@ -154,7 +168,9 @@ var list = gui.box(.{
     .scroll = true,
 
 }, &list_parts);
+
 var launcher_parts = [_]*gui.Node{ &search, &list };
+
 var launcher_root = gui.box(theme.popup.with(.{
 
     .padding = gui.Edges.all(theme.spacing),
@@ -171,6 +187,7 @@ var account_menu: gui.Menu(&.{
     .{ .icon = .power, .title = "Shut down", .run = shutdown },
 
 }) = .{};
+
 var desktop_menu: gui.Menu(&.{
 
     .{ .icon = .folder, .title = "Files", .run = files_open },
@@ -184,6 +201,9 @@ var desktop_menu: gui.Menu(&.{
 var listed: [64]api.display.Window = undefined;
 var count: usize = 0;
 
+/// The window that had focus when the list was last read.
+var leader: ?u32 = null;
+
 var home_bytes: [48]u8 = undefined;
 var home: []const u8 = "";
 var minute: u64 = std.math.maxInt(u64);
@@ -194,15 +214,19 @@ pub fn init() void {
     for (catalog.apps, 0..) |app, index| {
 
         buttons[index] = gui.tool(app.icon, &pick);
+
         buttons[index].style = buttons[index].style.with(.{
 
             .width = slot,
             .height = slot,
+
             .size = 22,
             .radius = 12,
 
         });
+
         buttons[index].data = index;
+
         dots[index] = gui.box(.{
 
             .width = 4,
@@ -212,7 +236,9 @@ pub fn init() void {
             .radius = 2,
 
         }, &.{});
+
         marker_parts[index] = .{&dots[index]};
+
         markers[index] = gui.box(.{
 
             .padding = .{
@@ -224,7 +250,9 @@ pub fn init() void {
             .items = .center,
 
         }, &marker_parts[index]);
+
         slot_parts[index] = .{ &buttons[index], &markers[index] };
+
         slots[index] = gui.box(.{
 
             .width = slot,
@@ -232,6 +260,7 @@ pub fn init() void {
             .direction = .stack,
 
         }, &slot_parts[index]);
+
         dock_parts[index] = &slots[index];
 
         entry_icons[index] = gui.icon(app.icon, theme.icon.with(.{
@@ -240,21 +269,26 @@ pub fn init() void {
             .size = 22,
 
         }));
+
         entry_titles[index] = gui.label(app.title, .{});
         entry_summaries[index] = gui.label(app.summary, theme.caption);
         entry_text_parts[index] = .{ &entry_titles[index], &entry_summaries[index] };
+
         entry_texts[index] = gui.box(.{
 
             .gap = 2,
             .justify = .center,
 
         }, &entry_text_parts[index]);
+
         entry_parts[index] = .{ &entry_icons[index], &entry_texts[index] };
+
         entries[index] = gui.box(theme.item.with(.{
 
             .height = 54,
 
         }), &entry_parts[index]);
+
         entries[index].action = &open;
         entries[index].data = index;
         list_parts[index] = &entries[index];
@@ -275,6 +309,7 @@ pub fn init() void {
     backdrop = gui.Image.init(@intCast(screen.width), @intCast(screen.height)) catch api.exit(3);
     backdrop.fit = .cover;
     granite(&backdrop);
+
     backdrop.publish() catch {
 
     };
@@ -284,34 +319,44 @@ pub fn init() void {
         .layer = .background,
 
     }) catch api.exit(3);
+
     bar = gui.Window.open(&bar_root, .{
 
         .layer = .panel,
+
         .width = screen.width,
         .height = height,
+
         .hidden = true,
 
     }) catch api.exit(3);
+
     dock = gui.Window.open(&dock_root, .{
 
         .layer = .panel,
+
         .width = 1,
         .height = 1,
+
         .hidden = true,
 
     }) catch api.exit(3);
+
     launcher = gui.Window.open(&launcher_root, .{
 
         .layer = .panel,
+
         .x = margin,
         .y = height + margin,
         .width = 440,
         .height = 420,
+
         .hidden = true,
         .motion = .drop,
         .shadow = true,
 
     }) catch api.exit(3);
+
     account_menu.init(null);
     desktop_menu.init(null);
     notices.init(screen, height);
@@ -340,9 +385,11 @@ pub fn start(name: []const u8) void {
 
     bar.show();
     dock.show();
+
     gui.display.reserve(height, slot + 4 * margin) catch {
 
     };
+
     reload();
     refresh();
 
@@ -356,6 +403,7 @@ pub fn stop() void {
     about.hide();
     bar.hide();
     dock.hide();
+
     gui.display.reserve(0, 0) catch {
 
     };
@@ -479,6 +527,7 @@ pub fn serve() void {
     while (true) {
 
         const request = api.receive(false) catch return;
+
         const result: u64 = switch (protocol.operation(request.second)) {
 
             .reload => blk: {
@@ -529,6 +578,7 @@ fn place(screen: gui.Rect) void {
         .height = height,
 
     });
+
     dock.move(.{
 
         .x = @divTrunc(screen.width - @as(i32, width), 2),
@@ -568,8 +618,11 @@ fn refresh() void {
 
     }
 
-    // A window taking focus means the pointer went elsewhere, so open menus close.
-    if (focused() != null) dismiss();
+    // A window taking focus means the pointer went elsewhere, so open menus close; other changes, such as a menu opening, leave them.
+    const now = if (focused()) |window| window.id else null;
+
+    if (now != null and now != leader) dismiss();
+    leader = now;
 
     bar.refresh();
     dock.refresh();
@@ -642,6 +695,7 @@ fn cycle() void {
 fn start_app(image: api.abi.Image, argument: []const u8) void {
 
     dismiss();
+
     catalog.start(image, argument) catch {
 
     };
@@ -701,12 +755,14 @@ fn reveal(_: *gui.Node) void {
 
     dismiss();
     user.selected = true;
+
     account_menu.show(.{
 
         .x = wallpaper.surface.list.width,
         .y = height + margin,
 
     });
+
     bar.refresh();
 
 }
@@ -828,6 +884,7 @@ fn replace(path: ?[]const u8) void {
     defer arena.deinit();
 
     const screen = wallpaper.surface.list.bounds();
+
     var next = load(arena.allocator(), path orelse "") catch blk: {
 
         var fresh = gui.Image.init(@intCast(screen.width), @intCast(screen.height)) catch return;
@@ -838,6 +895,7 @@ fn replace(path: ?[]const u8) void {
     };
 
     next.fit = .cover;
+
     next.publish() catch {
 
         next.deinit();

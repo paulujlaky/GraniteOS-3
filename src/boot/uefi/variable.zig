@@ -10,6 +10,7 @@ pub fn access(table: u64, name: [*:0]const u16, data: []u8, write: bool) Variabl
     if (table == 0) return error.NoDevice;
 
     const services: *const uefi.tables.RuntimeServices = @ptrFromInt(table);
+
     const attributes = uefi.tables.RuntimeServices.VariableAttributes{
 
         .non_volatile = true,
@@ -17,6 +18,7 @@ pub fn access(table: u64, name: [*:0]const u16, data: []u8, write: bool) Variabl
         .runtime_access = true,
 
     };
+
     var size = data.len;
 
     const status = if (write) services._setVariable(name, &uefi.tables.global_variable, attributes, data.len, data.ptr) else services._getVariable(name, &uefi.tables.global_variable, null, &size, data.ptr);

@@ -228,13 +228,16 @@ pub fn layout(bytes: []const u8) ?Layout {
                     for (0..count) |index| {
 
                         const usage = if (used != 0) usages[@min(index, used - 1)] else if (range[1] >= range[0] and range[1] != 0) range[0] + @as(u32, @intCast(index)) else 0;
+
                         const field = Field{
 
                             .offset = offsets[id] + @as(u16, @intCast(index * size)),
                             .size = @intCast(size),
                             .id = id,
+
                             .minimum = minimum,
                             .maximum = maximum,
+
                             .relative = value & 4 != 0,
 
                         };
@@ -327,4 +330,3 @@ pub fn translate(usage: u8) u16 {
     };
 
 }
-

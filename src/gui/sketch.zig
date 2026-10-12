@@ -75,6 +75,7 @@ pub const Sketch = struct {
 
                 .x = x,
                 .y = y,
+
                 .radius = radius,
                 .half = width / 2,
 
@@ -93,6 +94,7 @@ pub const Sketch = struct {
 
                 .x = x0,
                 .y = y0,
+
                 .dx = x1 - x0,
                 .dy = y1 - y0,
                 .half = width / 2,
@@ -115,8 +117,10 @@ pub const Sketch = struct {
 
                 .x = x,
                 .y = y,
+
                 .radius = radius,
                 .half = width / 2,
+
                 .start = start,
                 .end = end,
 
@@ -135,6 +139,7 @@ pub const Sketch = struct {
 
                 .x = (box[0] + box[2]) / 2,
                 .y = (box[1] + box[3]) / 2,
+
                 .rx = @max(@abs(box[2] - box[0]) / 2, 0.5),
                 .ry = @max(@abs(box[3] - box[1]) / 2, 0.5),
                 .half = width / 2,
@@ -159,8 +164,10 @@ pub const Sketch = struct {
 
                 .x = (left + right) / 2,
                 .y = (top + bottom) / 2,
+
                 .rx = (right - left) / 2,
                 .ry = (bottom - top) / 2,
+
                 .radius = @max(@min(radius, @min(right - left, bottom - top) / 2), 0),
                 .half = width / 2,
 
@@ -204,6 +211,7 @@ pub const Sketch = struct {
             .height = @intCast(self.height),
 
         }) orelse return;
+
         const alpha = canvas.opacity(color);
 
         for (span.top..span.bottom) |y| {
@@ -836,6 +844,7 @@ pub const Figure = struct {
 
             .width = @intCast(area.width),
             .height = @intCast(area.height),
+
             .list = target,
             .origin = .{
 

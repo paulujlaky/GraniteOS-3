@@ -284,6 +284,7 @@ pub const Text = struct {
 
         var lines = Lines.init(face, string, size, width);
         var index: usize = 0;
+
         var last = Line{
 
             .start = 0,
@@ -423,6 +424,7 @@ pub const Lines = struct {
         var span: f32 = 0;
         var previous: u16 = 0;
         var space: ?usize = null;
+
         var characters = font.Characters{
 
             .bytes = self.string[0..stop],
@@ -444,6 +446,7 @@ pub const Lines = struct {
                 const end = space orelse position;
 
                 self.index = end;
+
                 return .{
 
                     .start = begin,
@@ -493,6 +496,7 @@ fn nearest(face: *const font.Font, scale: f32, string: []const u8, line: Line, x
     var distance = @abs(x);
     var pen: f32 = 0;
     var previous: u16 = 0;
+
     var characters = font.Characters{
 
         .bytes = string[0..line.end],

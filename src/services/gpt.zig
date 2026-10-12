@@ -84,6 +84,7 @@ pub const Table = struct {
         const first = field(u64, &self.header, 40);
         const last = field(u64, &self.header, 48);
         const count = field(u32, &self.header, 80);
+
         var best = volume.Range{
 
             .first = 0,
@@ -129,6 +130,7 @@ pub const Table = struct {
     pub fn add(self: *Table, disk: anytype, kind: [16]u8, unique: [16]u8, range: volume.Range, name: []const u8) !void {
 
         const count = field(u32, &self.header, 80);
+
         const slot = for (0..count) |index| {
 
             if (!self.used(index)) break index;

@@ -40,23 +40,29 @@ const Card = struct {
     fn init(self: *Card, heading_text: []const u8, history: *const [span]f32) void {
 
         self.title = gui.label(heading_text, theme.caption);
+
         self.value = gui.label("", .{
 
             .size = 26,
 
         });
+
         self.detail = gui.label("", theme.caption);
+
         self.plot = .{
 
             .values = history,
 
         };
+
         self.graph = gui.chart(&self.plot, .{
 
             .height = 112,
 
         });
+
         self.parts = .{ &self.title, &self.value, &self.detail, &self.graph };
+
         self.node = gui.box(theme.panel.with(.{
 
             .grow = 1,
@@ -70,6 +76,7 @@ const Card = struct {
 
 var processor: Card = undefined;
 var memory: Card = undefined;
+
 var cards = gui.box(.{
 
     .direction = .row,
@@ -77,6 +84,7 @@ var cards = gui.box(.{
     .padding = .all(theme.spacing),
 
 }, &.{});
+
 var card_parts: [2]*gui.Node = undefined;
 
 const columns = [_]struct { title: []const u8, width: ?i32 }{
@@ -92,19 +100,23 @@ const columns = [_]struct { title: []const u8, width: ?i32 }{
 
 var heading_cells: [columns.len]gui.Node = undefined;
 var heading_parts: [columns.len]*gui.Node = undefined;
+
 var heading = gui.box(.{
 
     .height = 26,
     .padding = .axes(0, 18),
+
     .direction = .row,
     .items = .center,
 
 }, &heading_parts);
+
 var cells: [shown][columns.len]gui.Node = undefined;
 var cell_bytes: [shown][columns.len][32]u8 = undefined;
 var cell_parts: [shown][columns.len]*gui.Node = undefined;
 var rows: [shown]gui.Node = undefined;
 var row_list: [shown]*gui.Node = undefined;
+
 var table = gui.box(.{
 
     .grow = 1,
@@ -112,6 +124,7 @@ var table = gui.box(.{
     .scroll = true,
 
 }, &row_list);
+
 var parts = [_]*gui.Node{ &cards, &heading, &table };
 var root = gui.box(.{}, &parts);
 
@@ -139,6 +152,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             .text_align = if (index == 0) gui.style.Alignment.left else .right,
 
         }));
+
         heading_parts[index] = &heading_cells[index];
 
     }
@@ -151,11 +165,13 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
                 .width = column.width,
                 .grow = @as(u8, if (column.width == null) 1 else 0),
+
                 .size = theme.small,
                 .color = if (place == 0) theme.text else theme.muted,
                 .text_align = if (place == 0) gui.style.Alignment.left else .right,
 
             });
+
             cell_parts[index][place] = &cells[index][place];
 
         }
@@ -165,6 +181,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
             .height = 28,
 
         }), &cell_parts[index]);
+
         row_list[index] = row;
 
     }
@@ -175,6 +192,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Monitor",
         .application = .monitor,
+
         .width = 760,
         .height = 560,
 
@@ -239,6 +257,7 @@ fn sample() void {
 
         const record = &records[index];
         const cpu = if (elapsed == 0) 0 else @as(f32, @floatFromInt(record.ticks -| earlier(record.id))) * 100 / @as(f32, @floatFromInt(elapsed));
+
         const texts = [_][]const u8{
 
             name(record),

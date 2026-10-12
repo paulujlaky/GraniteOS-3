@@ -52,12 +52,14 @@ var selected: ?usize = null;
 var back = gui.tool(.back, &goBack);
 var forward = gui.tool(.forward, &goForward);
 var up = gui.tool(.up, &goUp);
+
 var location = gui.label("/", .{
 
     .grow = 1,
     .padding = .axes(0, 6),
 
 });
+
 var folder = gui.tool(.folder_add, &makeFolder);
 var document = gui.tool(.new, &makeFile);
 var rename = gui.tool(.pencil, &renameEntry);
@@ -81,6 +83,7 @@ var entry_menu: gui.Menu(&.{
     .{ .icon = .trash, .title = "Delete", .hint = "Del", .run = removeChosen },
 
 }) = .{};
+
 var folder_menu: gui.Menu(&.{
 
     .{ .icon = .folder_add, .title = "New folder", .run = folderChosen },
@@ -96,6 +99,7 @@ const place = theme.item.with(.{
     .height = 32,
 
 });
+
 var home_icon = gui.icon(.home, theme.icon);
 var home_label = gui.label("Home", .{});
 var home_parts = [_]*gui.Node{ &home_icon, &home_label };
@@ -104,12 +108,15 @@ var root_icon = gui.icon(.disk, theme.icon);
 var root_label = gui.label("Computer", .{});
 var root_parts = [_]*gui.Node{ &root_icon, &root_label };
 var root_place = gui.box(place, &root_parts);
+
 var places_title = gui.label("Places", theme.caption.with(.{
 
     .padding = gui.Edges.axes(4, 10),
 
 }));
+
 var places_parts = [_]*gui.Node{ &places_title, &home_place, &root_place };
+
 var places = gui.box(.{
 
     .width = 170,
@@ -130,54 +137,67 @@ var name_heading = gui.label("Name", theme.caption.with(.{
     },
 
 }));
+
 var size_heading = gui.label("Size", theme.caption.with(.{
 
     .width = 90,
     .text_align = .right,
 
 }));
+
 var heading_parts = [_]*gui.Node{ &name_heading, &size_heading };
+
 var heading = gui.box(.{
 
     .height = 28,
     .padding = .axes(0, 20),
+
     .direction = .row,
     .items = .center,
 
 }, &heading_parts);
+
 var list = gui.box(.{
 
     .grow = 1,
     .padding = .axes(0, theme.gap),
     .gap = 1,
+
     .scroll = true,
 
 }, &.{});
+
 var empty = gui.label("This folder is empty.", theme.caption.with(.{
 
     .grow = 1,
     .text_align = .center,
 
 }));
+
 var status = gui.label("", theme.caption.with(.{
 
     .padding = gui.Edges.axes(0, theme.spacing),
     .height = 26,
 
 }));
+
 var main_parts = [_]*gui.Node{ &heading, &list, &empty, &status };
+
 var main = gui.box(.{
 
     .grow = 1,
 
 }, &main_parts);
+
 var body_parts = [_]*gui.Node{ &places, &main };
+
 var body = gui.box(.{
 
     .grow = 1,
     .direction = .row,
 
 }, &body_parts);
+
 var root_parts_all = [_]*gui.Node{ &toolbar, &body };
 var root = gui.box(.{}, &root_parts_all);
 
@@ -199,10 +219,12 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         .title = "Files",
         .application = .explorer,
+
         .width = 780,
         .height = 500,
 
     }) catch api.exit(3);
+
     entry_menu.init(&window);
     folder_menu.init(&window);
     main.menu = &offerFolder;
@@ -267,6 +289,19 @@ fn visit(target: []const u8, quiet: bool) void {
 /// Reads the current folder again and rebuilds the list.
 fn reload(_: *gui.Node) void {
 
+    // The rows are built afresh, so the selection carries over by name, and is gone with an entry deleted or renamed.
+    var kept: [256]u8 = undefined;
+    var chosen: ?[]const u8 = null;
+
+    if (selected) |index| if (entries[index].name.len <= kept.len) {
+
+        @memcpy(kept[0..entries[index].name.len], entries[index].name);
+        chosen = kept[0..entries[index].name.len];
+
+    };
+
+    selected = null;
+
     _ = arena.reset(.free_all);
 
     const allocator = arena.allocator();
@@ -303,6 +338,7 @@ fn reload(_: *gui.Node) void {
 
     entries = found.items;
     std.mem.sort(Entry, entries, {}, before);
+
     build(allocator) catch {
 
         entries = &.{};
@@ -313,6 +349,7 @@ fn reload(_: *gui.Node) void {
     window.retitle(if (std.mem.eql(u8, path, "/")) "Files" else std.fs.path.basename(path));
     window.view(&root);
     summarize();
+    if (chosen) |name| select(name);
 
 }
 
@@ -337,17 +374,20 @@ fn build(allocator: std.mem.Allocator) !void {
     for (entries, 0..) |entry, index| {
 
         icons[index] = gui.icon(catalog.symbol(entry.name, entry.directory), theme.icon);
+
         names[index] = gui.label(entry.name, .{
 
             .grow = 1,
 
         });
+
         sizes[index] = gui.label(if (entry.directory) "" else try amount(allocator, entry.size), theme.caption.with(.{
 
             .width = 90,
             .text_align = .right,
 
         }));
+
         parts[index] = .{ &icons[index], &names[index], &sizes[index] };
         rows[index] = gui.box(theme.item, &parts[index]);
         rows[index].action = &pick;
@@ -391,6 +431,7 @@ fn summarize() void {
         count, if (count == 1) "item" else "items", volume.free >> 20, volume.total >> 20,
 
     }) catch "" else std.fmt.bufPrint(&status_bytes, "{d} items", .{count}) catch "";
+
     window.refresh();
 
 }

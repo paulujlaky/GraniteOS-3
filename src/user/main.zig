@@ -88,6 +88,7 @@ pub export fn app_main(role: usize, peer: usize, environment: *const abi.Environ
                 : [value] "{al}" (@as(u8, 0)),
                   [port] "{dx}" (@as(u16, 0x80)),
             );
+
             finish(96);
 
         },

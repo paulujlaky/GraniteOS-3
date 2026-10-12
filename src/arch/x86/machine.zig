@@ -218,6 +218,7 @@ fn addCore(id: u32, frames: *memory.Frames) !void {
 
         .next = cores,
         .id = id,
+
         .stack = stack + 9 * 4096,
         .emergency = .{
 
@@ -226,6 +227,7 @@ fn addCore(id: u32, frames: *memory.Frames) !void {
             emergency + 9 * 4096,
 
         },
+
         .idle = context.Context.init(@intFromPtr(&idle), stack + 9 * 4096 - 8, 0, true),
 
     };
@@ -397,6 +399,7 @@ pub fn reboot() noreturn {
     cpu.out(0x64, 0xfe);
 
     const empty = std.mem.zeroes([10]u8);
+
     asm volatile ("lidt (%[idtr]); int3" // Use an empty interrupt table to force a reset.
         :
         : [idtr] "r" (&empty),
@@ -405,6 +408,7 @@ pub fn reboot() noreturn {
             .memory = true,
 
         });
+
     cpu.halt();
 
 }

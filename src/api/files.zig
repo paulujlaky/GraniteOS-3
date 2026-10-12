@@ -163,6 +163,7 @@ pub const Files = struct {
                 .name = self.window[offset + 16 ..][0..length],
 
             };
+
             offset += 16 + length;
 
         }

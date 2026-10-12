@@ -10,6 +10,7 @@ pub const Entry = struct {
 
         self.id = 0;
         self.available = false;
+
         if (self.retries == 3) {
 
             self.offline = true;

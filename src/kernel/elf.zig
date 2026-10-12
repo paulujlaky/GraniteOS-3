@@ -33,6 +33,7 @@ pub const Segment = extern struct {
 };
 
 pub const LoadError = error{ InvalidElf, InvalidSegment, OverlappingSegments, InvalidEntry };
+
 pub const Image = struct {
 
     bytes: []const u8,

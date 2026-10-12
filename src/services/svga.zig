@@ -167,6 +167,7 @@ pub const Device = struct {
 
             self.reserve(5 + count);
             for ([_]u32{ remap_gmr2, surface_gmr, 0, offset, count }) |word| self.put(word);
+
             for (0..count) |page| {
 
                 const physical = api.physical(@intFromPtr(frame.ptr) + (offset + page) * 4096) catch return false;
@@ -263,6 +264,7 @@ pub const Device = struct {
         if (!self.pending) return;
 
         self.write(sync_start, 1);
+
         while (self.read(busy) != 0) {
 
         }

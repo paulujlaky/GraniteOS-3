@@ -226,6 +226,7 @@ pub fn exited(task: *process.Process, status: u64) void {
 pub fn faulted(task: *process.Process, frame: *const arch.context.Frame) void {
 
     const role = take(task.id) orelse return;
+
     const expected = switch (role) {
 
         3 => frame.vector == 14 and frame.code & 5 == 5,

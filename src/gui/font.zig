@@ -42,6 +42,7 @@ const Shape = struct {
     contours: usize = 0,
 
 };
+
 /// The embedded typefaces; every one is known to parse.
 pub const Face = enum(u8) {
 
@@ -227,6 +228,7 @@ pub const Font = struct {
             font.capital = read(i16, bytes, metrics + 88);
 
         };
+
         if (font.capital <= 0) font.capital = font.ascent + font.descent;
 
         for (0..read(u16, bytes, cmap + 2)) |index| {
@@ -422,6 +424,7 @@ pub const Font = struct {
             var repeat: usize = 1;
 
             offset += 1;
+
             if (flag & 8 != 0) {
 
                 repeat += data[offset];
@@ -438,6 +441,7 @@ pub const Font = struct {
                     .flag = flag,
 
                 };
+
                 index += 1;
 
             }
@@ -538,6 +542,7 @@ const Raster = struct {
     fn outline(self: *Raster, contour: []const Point, scale: f32, x: f32, y: f32) void {
 
         const count = contour.len;
+
         const begin = for (contour, 0..) |point, index| {
 
             if (point.flag & 1 != 0) break index;

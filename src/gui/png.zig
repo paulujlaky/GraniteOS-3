@@ -313,6 +313,7 @@ fn header(bytes: []const u8) Error!Image {
     const depth = body[8];
     const color = body[9];
     const power = depth > 0 and depth <= 16 and depth & (depth - 1) == 0;
+
     const valid = power and switch (color) {
 
         0 => true,
@@ -329,8 +330,10 @@ fn header(bytes: []const u8) Error!Image {
 
         .width = width,
         .height = height,
+
         .depth = @intCast(depth),
         .color = color,
+
         .channels = switch (color) {
 
             0, 3 => 1,
@@ -339,6 +342,7 @@ fn header(bytes: []const u8) Error!Image {
             else => 4,
 
         },
+
         .interlaced = body[12] == 1,
 
     };
@@ -668,6 +672,7 @@ test "png decodes a 2-bit palette image with tRNS alpha" {
     try filtered(allocator, &scanlines, &.{ 0x1b, 0x40, 0xe4, 0x00 }, 2, 1, 0);
 
     const stream = try deflate(allocator, scanlines.items);
+
     const bytes = try fixture(allocator, .{ 5, 2, 2, 3, 0 }, &.{
 
         .{ .kind = "PLTE", .body = &colors },
@@ -724,6 +729,7 @@ test "png decodes 1-bit greyscale with padding and a tRNS grey" {
     try filtered(allocator, &scanlines, &.{ 0xac, 0xff, 0x07, 0xff }, 2, 1, 3);
 
     const stream = try deflate(allocator, scanlines.items);
+
     const gamma = Chunk{
 
         .kind = "gAMA",
