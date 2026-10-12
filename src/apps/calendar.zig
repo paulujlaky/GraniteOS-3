@@ -475,7 +475,7 @@ fn fill() void {
 
     }
 
-    detail.content.label = std.fmt.bufPrint(&detail_bytes, "{s}, {d} {s} {d}", .{ time.days[time.weekday(picked.year, picked.month, picked.day)], picked.day, time.months[picked.month - 1], picked.year }) catch "";
+    detail.content.label = time.Date.on(picked.year, picked.month, picked.day).long(&detail_bytes, true);
     note.content.label = std.fmt.bufPrint(&note_bytes, "{s}{s}Week {d}, day {d} of the year", .{ holiday(picked) orelse "", if (holiday(picked) != null) "  \u{00b7}  " else "", picked.week(), picked.ordinal() }) catch "";
     today_button.hidden = picked.same(now);
 

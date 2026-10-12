@@ -368,6 +368,18 @@ pub fn snip(kind: Snip, delay: u8, surface: u64, out: []u8) ServiceError!?[]cons
 
 }
 
+/// Puts `target`, an absolute path ending in `/` for a folder, on the caller's desktop, or takes it off.
+pub fn pin(target: []const u8, on: bool) ServiceError!void {
+
+    var bytes: [256]u8 = undefined;
+    if (target.len > bytes.len) return error.Invalid;
+
+    @memcpy(bytes[0..target.len], target);
+
+    try supervised(try desktop(protocol.pack(.pin, @intFromBool(on)), bytes[0..target.len]));
+
+}
+
 /// Sends `message` and `window` to the caller's desktop, found through the supervisor on first use.
 fn desktop(message: u64, window: []u8) ServiceError!u64 {
 

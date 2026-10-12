@@ -1,11 +1,16 @@
-//! The signed-in desktop: wallpaper, top bar, dock, app launcher, menus, notifications, window switcher, clipboard history, and snips, all surfaces of the login process.
+//! The signed-in desktop: wallpaper and its items, top bar, dock, app launcher, menus, notifications, window switcher,
+//! clipboard history, and snips, all surfaces of the login process.
 
 const std = @import("std");
 
 const about = @import("about.zig");
 const catalog = @import("catalog.zig");
 const clips = @import("clips.zig");
+const dock = @import("dock.zig");
+const launcher = @import("launcher.zig");
 const notices = @import("notices.zig");
+const pins = @import("pins.zig");
+const shortcuts = @import("shortcuts.zig");
 const snip = @import("snip.zig");
 const switcher = @import("switcher.zig");
 
@@ -16,9 +21,8 @@ const protocol = api.protocol;
 const session = @import("root");
 const theme = gui.theme;
 
-/// Rows the top bar keeps, and the dock's button size.
-const height = 30;
-const slot = 46;
+/// Rows the top bar keeps.
+pub const height = 30;
 const margin = 8;
 
 const chip = gui.Style{
@@ -50,11 +54,9 @@ const chip = gui.Style{
 
 pub var wallpaper: gui.Window = undefined;
 var bar: gui.Window = undefined;
-var dock: gui.Window = undefined;
-var launcher: gui.Window = undefined;
 
 /// Every surface of the desktop, for the event loop.
-var surfaces: [11]*gui.Window = undefined;
+var surfaces: [13]*gui.Window = undefined;
 
 /// The picture behind everything, shared with the lock screen.
 pub var backdrop: gui.Image = undefined;
@@ -65,19 +67,13 @@ var painting = gui.picture(&backdrop, .{
 
 });
 
-/// The area the pointer sweeps out over the wallpaper while the button is held, for picking desktop items once there are some.
-var swath = gui.custom(&paint_swath, .{});
-var scenery_parts = [_]*gui.Node{ &painting, &swath };
+var scenery_parts = [_]*gui.Node{ &painting, &shortcuts.node };
 
 var scenery = gui.box(.{
 
     .direction = .stack,
 
 }, &scenery_parts);
-
-/// Where a sweep began and where the pointer is.
-var swept: ?gui.Point = null;
-var reach = gui.Point{};
 
 var files = api.Files{};
 
@@ -134,66 +130,6 @@ var bar_root = gui.box(.{
 
 }, &bar_parts);
 
-// Dock: one button per app, with a dot under apps that have windows.
-var buttons: [catalog.apps.len]gui.Node = undefined;
-var dots: [catalog.apps.len]gui.Node = undefined;
-var markers: [catalog.apps.len]gui.Node = undefined;
-var marker_parts: [catalog.apps.len][1]*gui.Node = undefined;
-var slots: [catalog.apps.len]gui.Node = undefined;
-var slot_parts: [catalog.apps.len][2]*gui.Node = undefined;
-var dock_parts: [catalog.apps.len]*gui.Node = undefined;
-
-var dock_root = gui.box(.{
-
-    .padding = .all(margin),
-    .direction = .row,
-    .gap = 6,
-
-    .background = theme.glass,
-    .border = theme.line,
-    .border_width = theme.border,
-    .radius = 16,
-
-}, &dock_parts);
-
-// Launcher: a search field over the apps that match it.
-var search_bytes: [64]u8 = undefined;
-
-var search_text = gui.Text{
-
-    .buffer = &search_bytes,
-    .placeholder = "Search apps",
-
-};
-
-var search = gui.input(&search_text);
-var searched: u64 = 0;
-var entries: [catalog.apps.len]gui.Node = undefined;
-var entry_icons: [catalog.apps.len]gui.Node = undefined;
-var entry_titles: [catalog.apps.len]gui.Node = undefined;
-var entry_summaries: [catalog.apps.len]gui.Node = undefined;
-var entry_texts: [catalog.apps.len]gui.Node = undefined;
-var entry_text_parts: [catalog.apps.len][2]*gui.Node = undefined;
-var entry_parts: [catalog.apps.len][2]*gui.Node = undefined;
-var list_parts: [catalog.apps.len]*gui.Node = undefined;
-
-var list = gui.box(.{
-
-    .grow = 1,
-    .gap = 2,
-    .scroll = true,
-
-}, &list_parts);
-
-var launcher_parts = [_]*gui.Node{ &search, &list };
-
-var launcher_root = gui.box(theme.popup.with(.{
-
-    .padding = gui.Edges.all(theme.spacing),
-    .gap = 10,
-
-}), &launcher_parts);
-
 /// The session menu under the account name, and the wallpaper's right-click menu.
 var account_menu: gui.Menu(&.{
 
@@ -214,14 +150,15 @@ var desktop_menu: gui.Menu(&.{
 
 }) = .{};
 
-var listed: [64]api.display.Window = undefined;
-var count: usize = 0;
+/// The windows on the screen, bottom first, as last read.
+pub var listed: [64]api.display.Window = undefined;
+pub var count: usize = 0;
 
 /// The window that had focus when the list was last read.
 var leader: ?u32 = null;
 
 var home_bytes: [48]u8 = undefined;
-var home: []const u8 = "";
+pub var home: []const u8 = "";
 var minute: u64 = std.math.maxInt(u64);
 
 /// The display restarts already seen.
@@ -230,94 +167,8 @@ var restarted: u64 = 0;
 /// Opens every surface: the wallpaper now, the rest hidden until a session starts.
 pub fn init() void {
 
-    for (catalog.apps, 0..) |app, index| {
-
-        buttons[index] = gui.tool(app.icon, &pick);
-
-        buttons[index].style = buttons[index].style.with(.{
-
-            .width = slot,
-            .height = slot,
-
-            .size = 22,
-            .radius = 12,
-
-        });
-
-        buttons[index].data = index;
-
-        dots[index] = gui.box(.{
-
-            .width = 4,
-            .height = 4,
-
-            .background = theme.accent,
-            .radius = 2,
-
-        }, &.{});
-
-        marker_parts[index] = .{&dots[index]};
-
-        markers[index] = gui.box(.{
-
-            .padding = .{
-
-                .bottom = 1,
-
-            },
-            .justify = .end,
-            .items = .center,
-
-        }, &marker_parts[index]);
-
-        slot_parts[index] = .{ &buttons[index], &markers[index] };
-
-        slots[index] = gui.box(.{
-
-            .width = slot,
-            .height = slot,
-            .direction = .stack,
-
-        }, &slot_parts[index]);
-
-        dock_parts[index] = &slots[index];
-
-        entry_icons[index] = gui.icon(app.icon, theme.icon.with(.{
-
-            .width = 32,
-            .size = 22,
-
-        }));
-
-        entry_titles[index] = gui.label(app.title, .{});
-        entry_summaries[index] = gui.label(app.summary, theme.caption);
-        entry_text_parts[index] = .{ &entry_titles[index], &entry_summaries[index] };
-
-        entry_texts[index] = gui.box(.{
-
-            .gap = 2,
-            .justify = .center,
-
-        }, &entry_text_parts[index]);
-
-        entry_parts[index] = .{ &entry_icons[index], &entry_texts[index] };
-
-        entries[index] = gui.box(theme.item.with(.{
-
-            .height = 54,
-
-        }), &entry_parts[index]);
-
-        entries[index].action = &open;
-        entries[index].data = index;
-        list_parts[index] = &entries[index];
-
-    }
-
     apps.action = &toggle;
-    swath.track = &sweep;
     user.action = &reveal;
-    search.action = &first;
 
     const screen = while (true) break gui.screen() catch {
 
@@ -351,41 +202,25 @@ pub fn init() void {
 
     }) catch api.exit(3);
 
-    dock = gui.Window.open(&dock_root, .{
+    dock.init();
 
-        .layer = .panel,
-
-        .width = 1,
-        .height = 1,
-
-        .hidden = true,
-        .tuck = true,
-
-    }) catch api.exit(3);
-
-    launcher = gui.Window.open(&launcher_root, .{
-
-        .layer = .panel,
+    launcher.init(.{
 
         .x = margin,
         .y = height + margin,
-        .width = 440,
-        .height = 420,
 
-        .hidden = true,
-        .motion = .drop,
-        .shadow = true,
-
-    }) catch api.exit(3);
+    });
 
     account_menu.init(null);
     desktop_menu.init(null);
+    pins.init();
+    shortcuts.init();
     notices.init(screen, height);
     switcher.init(screen);
     clips.init(screen);
     about.init();
     snip.init();
-    surfaces = .{ &wallpaper, &bar, &dock, &launcher, &account_menu.window, &desktop_menu.window, &notices.window, &switcher.window, &clips.window, &about.window, &snip.window };
+    surfaces = .{ &wallpaper, &bar, &dock.window, &launcher.window, &account_menu.window, &desktop_menu.window, &pins.app_menu.window, &shortcuts.menu.window, &notices.window, &switcher.window, &clips.window, &about.window, &snip.window };
 
     place(screen);
 
@@ -406,7 +241,7 @@ pub fn start(name: []const u8) void {
     minute = std.math.maxInt(u64);
 
     bar.show();
-    dock.show();
+    dock.window.show();
     claim();
     reload();
     refresh();
@@ -416,7 +251,7 @@ pub fn start(name: []const u8) void {
 /// Keeps the rows of the bar and dock out of maximised windows' way.
 fn claim() void {
 
-    gui.display.reserve(height, slot + 4 * margin) catch {
+    gui.display.reserve(height, dock.reach) catch {
 
     };
 
@@ -430,7 +265,8 @@ pub fn stop() void {
     notices.clear();
     about.hide();
     bar.hide();
-    dock.hide();
+    dock.window.hide();
+    pins.load("");
 
     gui.display.reserve(0, 0) catch {
 
@@ -443,9 +279,7 @@ pub fn stop() void {
 /// Keeps the clock and the launcher's search current; call it every pass of the event loop.
 pub fn tick() void {
 
-    // The search field takes its own keys, so a changed text is how typing shows.
-    if (search_text.version != searched) filter();
-
+    launcher.tick();
     notices.tick();
     snip.tick();
 
@@ -461,9 +295,11 @@ pub fn tick() void {
     if (now / 60 == minute or bar.surface.hidden) return;
 
     const date = api.Date.init(now);
+    var day_bytes: [16]u8 = undefined;
+    var hour_bytes: [16]u8 = undefined;
 
     minute = now / 60;
-    time.content.label = std.fmt.bufPrint(&time_bytes, "{s} {d} {s}   {d:0>2}:{d:0>2}", .{ api.time.days[date.weekday][0..3], date.day, api.time.months[date.month - 1][0..3], date.hour, date.minute }) catch "";
+    time.content.label = std.fmt.bufPrint(&time_bytes, "{s}   {s}", .{ date.short(&day_bytes), date.clock(&hour_bytes, false) }) catch "";
     bar.refresh();
 
 }
@@ -505,22 +341,10 @@ pub fn react(input: gui.Input) bool {
 
         }),
         .close => if (window == &about.window) about.hide(),
-        .button => if (event.pressed and window == &wallpaper) {
-
-            dismiss();
-
-            // The right button opens the wallpaper's menu where it was pressed.
-            if (event.code == 1) desktop_menu.show(.{
-
-                .x = event.x,
-                .y = event.y,
-
-            });
-
-        },
         .key => {
 
             if (!event.pressed) return true;
+            if (window == &wallpaper and !event.modifiers.super and shortcuts.react(event)) return true;
 
             if (event.key() == .escape) {
 
@@ -583,6 +407,7 @@ pub fn serve() void {
             },
             .notify => notify(request),
             .snip => snip.ask(request, home),
+            .pin => pins.serve(request),
             else => protocol.invalid,
 
         };
@@ -613,11 +438,8 @@ fn notify(request: api.Request) u64 {
 
 }
 
-/// Puts the bar, dock, and menus where a `screen`-sized display wants them.
+/// Puts the bar, dock, items, and menus where a `screen`-sized display wants them.
 fn place(screen: gui.Rect) void {
-
-    const width = catalog.apps.len * slot + (catalog.apps.len - 1) * 6 + 2 * margin;
-    const tall = slot + 2 * margin;
 
     bar.move(.{
 
@@ -626,38 +448,19 @@ fn place(screen: gui.Rect) void {
 
     });
 
-    dock.move(.{
-
-        .x = @divTrunc(screen.width - @as(i32, width), 2),
-        .y = screen.height - tall - margin,
-        .width = width,
-        .height = tall,
-
-    });
-
+    dock.place(screen);
+    shortcuts.redraw();
     notices.place(screen, height);
     switcher.place(screen);
     clips.place(screen);
 
 }
 
-/// Reads the window list again and updates the dock's dots and the bar's title.
+/// Reads the window list again and updates the dock and the bar's title.
 fn refresh() void {
 
     count = gui.display.windows(&listed) catch 0;
     title.content.label = "";
-
-    for (catalog.apps, 0..) |app, index| {
-
-        dots[index].hidden = true;
-
-        for (listed[0..count]) |window| {
-
-            if (window.application == @intFromEnum(app.image)) dots[index].hidden = false;
-
-        }
-
-    }
 
     for (listed[0..count]) |*window| {
 
@@ -672,11 +475,11 @@ fn refresh() void {
     leader = now;
 
     bar.refresh();
-    dock.refresh();
+    dock.arrange();
 
 }
 
-fn focused() ?*const api.display.Window {
+pub fn focused() ?*const api.display.Window {
 
     for (listed[0..count]) |*window| {
 
@@ -688,43 +491,16 @@ fn focused() ?*const api.display.Window {
 
 }
 
-/// Starts app `image` on `argument`, or brings its windows forward from the dock.
-fn pick(node: *gui.Node) void {
-
-    const app = catalog.apps[node.data];
-    var newest: ?*const api.display.Window = null;
-    var oldest: ?*const api.display.Window = null;
-
-    dismiss();
+/// Whether app `image` has a window open.
+pub fn running(image: api.abi.Image) bool {
 
     for (listed[0..count]) |*window| {
 
-        if (window.application != @intFromEnum(app.image)) continue;
-
-        if (oldest == null) oldest = window;
-        newest = window;
+        if (window.application == @intFromEnum(image)) return true;
 
     }
 
-    const top = newest orelse return start_app(app.image, home);
-    const current = focused();
-
-    // Clicking the app already in front shows its next window, or tucks away its only one.
-    if (current != null and current.?.application == @intFromEnum(app.image) and !top.state.minimized) {
-
-        if (oldest.? == top) gui.display.activate(top.id, .minimize) catch {
-
-        } else gui.display.activate(oldest.?.id, .raise) catch {
-
-        };
-
-        return;
-
-    }
-
-    gui.display.activate(top.id, .raise) catch {
-
-    };
+    return false;
 
 }
 
@@ -739,7 +515,7 @@ fn cycle() void {
 
 }
 
-fn start_app(image: api.abi.Image, argument: []const u8) void {
+pub fn start_app(image: api.abi.Image, argument: []const u8) void {
 
     dismiss();
 
@@ -749,49 +525,13 @@ fn start_app(image: api.abi.Image, argument: []const u8) void {
 
 }
 
-fn open(node: *gui.Node) void {
-
-    start_app(catalog.apps[node.data].image, home);
-
-}
-
-/// Launches the first app the search still shows.
-fn first(_: *gui.Node) void {
-
-    for (&entries) |*entry| {
-
-        if (!entry.hidden) return open(entry);
-
-    }
-
-}
-
-fn filter() void {
-
-    const query = search_text.text();
-
-    searched = search_text.version;
-
-    for (catalog.apps, 0..) |app, index| {
-
-        entries[index].hidden = query.len != 0 and std.ascii.indexOfIgnoreCase(app.title, query) == null and std.ascii.indexOfIgnoreCase(app.summary, query) == null;
-
-    }
-
-    launcher.refresh();
-
-}
-
 fn toggle(_: *gui.Node) void {
 
-    if (!launcher.surface.hidden) return dismiss();
+    if (launcher.shown()) return dismiss();
 
     dismiss();
-    search_text.clear();
-    filter();
     apps.selected = true;
     launcher.show();
-    launcher.focus(&search);
     bar.refresh();
 
 }
@@ -814,12 +554,21 @@ fn reveal(_: *gui.Node) void {
 
 }
 
+/// Opens the wallpaper's menu at `at`.
+pub fn offer(at: gui.Point) void {
+
+    desktop_menu.show(at);
+
+}
+
 /// Closes the launcher, the menus, and the clipboard history.
 pub fn dismiss() void {
 
-    if (!launcher.surface.hidden) launcher.hide();
+    launcher.hide();
     account_menu.hide();
     desktop_menu.hide();
+    pins.app_menu.hide();
+    shortcuts.menu.hide();
     clips.hide();
 
     apps.selected = false;
@@ -852,52 +601,6 @@ fn about_open() void {
 
 }
 
-/// Follows a press on the wallpaper, sweeping out an area until the button comes up.
-fn sweep(_: *gui.Node, track: gui.Track) void {
-
-    const before = swept_area();
-
-    switch (track.phase) {
-
-        .down => {
-
-            dismiss();
-            swept = track.at;
-
-        },
-        .move => {
-
-        },
-        .up => swept = null,
-
-    }
-
-    reach = track.at;
-
-    // Only around the area before and after repaints, its soft edge included.
-    for ([_]?gui.Rect{ before, swept_area() }) |entry| {
-
-        if (entry) |area| wallpaper.damage = wallpaper.damage.join(area.inset(-2));
-
-    }
-
-}
-
-/// The area swept out so far, once the pointer has moved from where the press began.
-fn swept_area() ?gui.Rect {
-
-    const from = swept orelse return null;
-
-    return if (std.meta.eql(from, reach)) null else gui.Rect.spanning(from, reach);
-
-}
-
-fn paint_swath(_: *gui.Node, target: *gui.List) void {
-
-    target.sweep(swept_area() orelse return);
-
-}
-
 fn screenshot() void {
 
     snip.take(.screen, home);
@@ -925,6 +628,7 @@ fn reload() void {
 
     preferences.open(user_label.content.label, "desktop");
     replace(preferences.get("wallpaper"));
+    pins.load(user_label.content.label);
 
 }
 

@@ -38,15 +38,9 @@ pub const Config = struct {
     /// The value of `key`, or null when it has none.
     pub fn get(self: *const Config, key: []const u8) ?[]const u8 {
 
-        var lines = std.mem.tokenizeAny(u8, self.bytes[0..self.length], "\r\n");
+        var values = self.all(key);
 
-        while (lines.next()) |line| {
-
-            if (holds(line, key)) return line[key.len + 1 ..];
-
-        }
-
-        return null;
+        return values.next();
 
     }
 
@@ -57,8 +51,29 @@ pub const Config = struct {
 
     }
 
+    /// Every value `key` holds, for keys given more than one with `add`.
+    pub fn all(self: *const Config, key: []const u8) Values {
+
+        return .{
+
+            .lines = std.mem.tokenizeAny(u8, self.bytes[0..self.length], "\r\n"),
+            .key = key,
+
+        };
+
+    }
+
     /// Gives `key` `value`, a string or a whole number, in place of what it held; false when it does not fit on one line of the file.
     pub fn set(self: *Config, key: []const u8, value: anytype) bool {
+
+        self.erase(key);
+
+        return self.add(key, value);
+
+    }
+
+    /// Gives `key` `value` as well as what it holds; false when it does not fit on one line of the file.
+    pub fn add(self: *Config, key: []const u8, value: anytype) bool {
 
         var scratch: [32]u8 = undefined;
 
@@ -68,8 +83,6 @@ pub const Config = struct {
             else => value,
 
         };
-
-        self.erase(key);
 
         const open_line = self.length != 0 and self.bytes[self.length - 1] != '\n';
         const needed = @intFromBool(open_line) + key.len + 1 + text.len + 1;
@@ -124,6 +137,25 @@ pub const Config = struct {
 
         try files.create(path);
         try files.write(path, 0, self.bytes[0..self.length]);
+
+    }
+
+};
+
+pub const Values = struct {
+
+    lines: std.mem.TokenIterator(u8, .any),
+    key: []const u8,
+
+    pub fn next(self: *Values) ?[]const u8 {
+
+        while (self.lines.next()) |line| {
+
+            if (holds(line, self.key)) return line[self.key.len + 1 ..];
+
+        }
+
+        return null;
 
     }
 

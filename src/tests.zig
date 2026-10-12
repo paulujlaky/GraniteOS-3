@@ -279,3 +279,17 @@ test "firmware clock and calendar dates agree across leap years and reject impos
     try std.testing.expectEqual(null, clock.seconds(invalid));
 
 }
+
+test "dates read month first on a 12-hour clock" {
+
+    var bytes: [40]u8 = undefined;
+    const afternoon = time.Date.init(1791640987);
+
+    try std.testing.expectEqualStrings("2:03 PM", afternoon.clock(&bytes, false));
+    try std.testing.expectEqualStrings("2:03:07 PM", afternoon.clock(&bytes, true));
+    try std.testing.expectEqualStrings("Sat, Oct 10", afternoon.short(&bytes));
+    try std.testing.expectEqualStrings("Saturday, October 10, 2026", afternoon.long(&bytes, true));
+    try std.testing.expectEqualStrings("12:00 AM", time.Date.on(2026, 10, 12).clock(&bytes, false));
+    try std.testing.expectEqualStrings("Monday, October 12", time.Date.on(2026, 10, 12).long(&bytes, false));
+
+}

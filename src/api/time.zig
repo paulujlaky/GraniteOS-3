@@ -70,4 +70,62 @@ pub const Date = struct {
 
     }
 
+    /// Midnight on `day` of `month` of `year`.
+    pub fn on(year: u16, month: u8, day: u8) Date {
+
+        return .{
+
+            .year = year,
+
+            .month = month,
+            .day = day,
+
+            .hour = 0,
+            .minute = 0,
+            .second = 0,
+
+            .weekday = weekday(year, month, day),
+
+        };
+
+    }
+
+    /// The hour on a 12-hour clock, from 1 to 12.
+    pub fn twelve(self: Date) u8 {
+
+        return if (self.hour % 12 == 0) 12 else self.hour % 12;
+
+    }
+
+    pub fn half(self: Date) []const u8 {
+
+        return if (self.hour < 12) "AM" else "PM";
+
+    }
+
+    /// The time such as `3:07 PM`, or `3:07:09 PM` with `seconds`.
+    pub fn clock(self: Date, out: []u8, seconds: bool) []const u8 {
+
+        if (seconds) return std.fmt.bufPrint(out, "{d}:{d:0>2}:{d:0>2} {s}", .{ self.twelve(), self.minute, self.second, self.half() }) catch "";
+
+        return std.fmt.bufPrint(out, "{d}:{d:0>2} {s}", .{ self.twelve(), self.minute, self.half() }) catch "";
+
+    }
+
+    /// The date such as `Mon, Oct 12`.
+    pub fn short(self: Date, out: []u8) []const u8 {
+
+        return std.fmt.bufPrint(out, "{s}, {s} {d}", .{ days[self.weekday][0..3], months[self.month - 1][0..3], self.day }) catch "";
+
+    }
+
+    /// The date such as `Monday, October 12, 2026`, or `Monday, October 12` without the `year`.
+    pub fn long(self: Date, out: []u8, year: bool) []const u8 {
+
+        if (!year) return std.fmt.bufPrint(out, "{s}, {s} {d}", .{ days[self.weekday], months[self.month - 1], self.day }) catch "";
+
+        return std.fmt.bufPrint(out, "{s}, {s} {d}, {d}", .{ days[self.weekday], months[self.month - 1], self.day, self.year }) catch "";
+
+    }
+
 };

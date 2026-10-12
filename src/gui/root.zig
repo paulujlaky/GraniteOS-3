@@ -25,6 +25,7 @@ pub const Edges = style.Edges;
 
 pub const Node = @import("node.zig").Node;
 pub const Track = @import("node.zig").Track;
+pub const Drag = @import("node.zig").Drag;
 pub const Text = @import("text.zig").Text;
 pub const leading = @import("text.zig").leading;
 pub const ascent = @import("text.zig").ascent;

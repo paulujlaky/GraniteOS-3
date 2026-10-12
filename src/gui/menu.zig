@@ -30,6 +30,9 @@ pub const Choice = struct {
     /// Asked each time the menu shows; a choice it refuses is greyed out.
     enabled: ?*const fn () bool = null,
 
+    /// Asked each time the menu shows; a choice it refuses is left out, such as Pin where Unpin applies.
+    offered: ?*const fn () bool = null,
+
 };
 
 /// A rule between groups of choices.
@@ -121,6 +124,8 @@ pub fn Menu(comptime choices: []const Choice) type {
 
             for (choices, 0..) |*choice, index| {
 
+                if (choice.offered) |offer| self.rows[index].hidden = !offer();
+
                 const check = choice.enabled orelse continue;
                 const on = check();
 
@@ -134,6 +139,7 @@ pub fn Menu(comptime choices: []const Choice) type {
 
             area.x = at.x;
             area.y = at.y;
+            area.height = self.root.measure().height;
             self.window.surface.spec.anchor = if (self.owner) |parent| @intCast(parent.surface.id) else api.display.Spec.none;
             self.window.focus(null);
             self.window.move(area);
@@ -189,14 +195,14 @@ pub fn Menu(comptime choices: []const Choice) type {
             const start: isize = if (event.key() == .home) -1 else if (event.key() == .end) choices.len else if (menu.focused) |row| @intCast(row.data) else if (step > 0) -1 else choices.len;
             var index = start;
 
-            // Separators and greyed-out choices are passed over, wrapping at either end.
+            // Separators and greyed-out or left-out choices are passed over, wrapping at either end.
             for (0..choices.len) |_| {
 
                 index = @mod(index + step, @as(isize, choices.len));
 
                 const row = &self.rows[@intCast(index)];
 
-                if (row.action != null) {
+                if (row.action != null and !row.hidden) {
 
                     menu.focus(row);
                     break;

@@ -56,6 +56,50 @@ pub const Track = struct {
 
 };
 
+/// A press that turns into a drag once the pointer strays a few pixels from where it went down, so a slightly shaky click stays a click.
+pub const Drag = struct {
+
+    start: Point,
+    at: Point,
+    moved: bool = false,
+
+    const slack = 4;
+
+    pub fn init(at: Point) Drag {
+
+        return .{
+
+            .start = at,
+            .at = at,
+
+        };
+
+    }
+
+    /// Follows the pointer to `at`; true once the press has become a drag.
+    pub fn follow(self: *Drag, at: Point) bool {
+
+        self.at = at;
+        if (@abs(at.x - self.start.x) + @abs(at.y - self.start.y) > slack) self.moved = true;
+
+        return self.moved;
+
+    }
+
+    /// How far the pointer has come since the press.
+    pub fn offset(self: Drag) Point {
+
+        return .{
+
+            .x = self.at.x - self.start.x,
+            .y = self.at.y - self.start.y,
+
+        };
+
+    }
+
+};
+
 /// The nodes a window highlights while drawing.
 pub const Marks = struct {
 

@@ -716,6 +716,33 @@ pub fn tagged(which: ?font.Icon, string: []const u8, at: Point, centred: bool) R
 
 }
 
+/// `string`, cut short with `...` in `out` when it runs wider than `width` at `size` in `face`.
+pub fn shorten(string: []const u8, face: font.Face, size: f32, width: i32, out: []u8) []const u8 {
+
+    const shape = font.face(face);
+    const scale = size / shape.units;
+    const room: f32 = @floatFromInt(width);
+
+    if (shape.measure(string, scale) <= room) return string;
+
+    var end = @min(string.len, out.len -| 3);
+
+    while (end > 0) : (end -= 1) {
+
+        // Only whole characters are kept.
+        if (end < string.len and string[end] & 0xc0 == 0x80) continue;
+
+        @memcpy(out[0..end], string[0..end]);
+        @memcpy(out[end..][0..3], "...");
+
+        if (shape.measure(out[0 .. end + 3], scale) <= room) return out[0 .. end + 3];
+
+    }
+
+    return "...";
+
+}
+
 pub fn move(area: Rect, by: Point) Rect {
 
     return .{

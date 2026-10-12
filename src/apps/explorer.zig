@@ -49,11 +49,8 @@ var entries: []Entry = &.{};
 var lines: []gui.Node = &.{};
 var selected: ?usize = null;
 
-/// How far the pointer moves with the button down before a press on a row becomes a drag.
-const slack = 4;
-
 /// An entry being dragged to move it, and the folder it would land in, lit up, with whether it was selected before.
-var dragging: ?struct { source: usize, start: gui.Point, at: gui.Point, moved: bool = false } = null;
+var dragging: ?struct { source: usize, drag: gui.Drag } = null;
 
 /// What the tag beside a dragged entry shows, and where.
 const Tag = struct {
@@ -96,6 +93,9 @@ var entry_menu: gui.Menu(&.{
     .{ .icon = .pencil, .title = "Rename", .hint = "F2", .run = renameChosen },
     .{ .icon = .copy, .title = "Copy", .hint = "Ctrl+C", .run = copy, .enabled = copyable },
     .{ .icon = .clipboard, .title = "Copy path", .run = copyPath },
+    gui.menu.separator,
+    .{ .icon = .monitor, .title = "Add to desktop", .run = pinChosen, .offered = unpinned },
+    .{ .icon = .close, .title = "Remove from desktop", .run = unpinChosen, .offered = pinned },
     gui.menu.separator,
     .{ .icon = .trash, .title = "Delete", .hint = "Del", .run = removeChosen },
 
@@ -491,16 +491,13 @@ fn drag(row: *gui.Node, track: gui.Track) void {
         .down => dragging = .{
 
             .source = row.data,
-            .start = track.at,
-            .at = track.at,
+            .drag = .init(track.at),
 
         },
         .move => if (dragging) |*held| {
 
-            held.at = track.at;
-            if (!held.moved and @abs(track.at.x - held.start.x) + @abs(track.at.y - held.start.y) <= slack) return;
+            if (!held.drag.follow(track.at)) return;
 
-            held.moved = true;
             row.cursor = .grabbing;
             aim(destination(window.root.hit(track.at), held.source));
 
@@ -514,7 +511,7 @@ fn drag(row: *gui.Node, track: gui.Track) void {
             row.cursor = null;
             aim(null);
             if (earlier) |shown| window.damage = window.damage.join(shown.area);
-            if (held.moved) if (target) |node| move(held.source, node);
+            if (held.drag.moved) if (target) |node| move(held.source, node);
 
             return;
 
@@ -537,7 +534,7 @@ fn drag(row: *gui.Node, track: gui.Track) void {
 fn tagged(out: []u8) ?Tag {
 
     const held = dragging orelse return null;
-    if (!held.moved) return null;
+    if (!held.drag.moved) return null;
 
     const entry = entries[held.source];
     const words = if (aimed) |node| std.fmt.bufPrint(out, "Move {s} to {s}", .{ entry.name, named(node) }) catch entry.name else entry.name;
@@ -549,8 +546,8 @@ fn tagged(out: []u8) ?Tag {
         .words = words,
         .area = gui.draw.tagged(icon, words, .{
 
-            .x = held.at.x + 14,
-            .y = held.at.y + 12,
+            .x = held.drag.at.x + 14,
+            .y = held.drag.at.y + 12,
 
         }, false),
 
@@ -644,6 +641,7 @@ fn move(source: usize, node: *gui.Node) void {
     const to = std.fmt.bufPrint(&to_bytes, "{s}{s}{s}", .{ inside, if (std.mem.endsWith(u8, inside, "/")) "" else "/", name }) catch return;
 
     files.rename(from, to) catch |err| return report(err);
+    repin(from, to, entries[source].directory);
     reload(&refresh);
 
 }
@@ -789,11 +787,16 @@ fn applyRename(name: []const u8) void {
 
     if (!catalog.valid(name)) return dialog.refuse(catalog.unnamed);
 
-    files.rename(join(&from, entries[index].name) orelse return, join(&to, name) orelse return) catch |err| {
+    const old = join(&from, entries[index].name) orelse return;
+    const new = join(&to, name) orelse return;
+
+    files.rename(old, new) catch |err| {
 
         return dialog.refuse(catalog.reason(err));
 
     };
+
+    repin(old, new, entries[index].directory);
 
     var kept: [256]u8 = undefined;
     const copy_name = kept[0..name.len];
@@ -818,8 +821,51 @@ fn applyRemove(_: []const u8) void {
     const index = selected orelse return;
     var target: [512]u8 = undefined;
 
-    files.remove(join(&target, entries[index].name) orelse return) catch |err| return report(err);
+    const full = join(&target, entries[index].name) orelse return;
+
+    files.remove(full) catch |err| return report(err);
+    repin(full, null, entries[index].directory);
     reload(&refresh);
+
+}
+
+/// What the desktop calls entry `index` when it is pinned there: its full path, ending in `/` for a folder.
+fn pinning(out: []u8, index: usize) ?[]const u8 {
+
+    const full = join(out[0 .. out.len - 1], entries[index].name) orelse return null;
+
+    if (!entries[index].directory) return full;
+
+    out[full.len] = '/';
+
+    return out[0 .. full.len + 1];
+
+}
+
+/// Keeps the desktop's item for `from` pointing at it once it moves to `to`, or takes it off once deleted.
+fn repin(from: []const u8, to: ?[]const u8, directory: bool) void {
+
+    var old_bytes: [514]u8 = undefined;
+    var new_bytes: [514]u8 = undefined;
+    const slash = if (directory) "/" else "";
+    const old = std.fmt.bufPrint(&old_bytes, "{s}{s}", .{ from, slash }) catch return;
+
+    if (!catalog.placed(owner(), old)) return;
+
+    api.pin(old, false) catch {
+
+    };
+
+    api.pin(std.fmt.bufPrint(&new_bytes, "{s}{s}", .{ to orelse return, slash }) catch return, true) catch {
+
+    };
+
+}
+
+/// The user whose home Files opened in.
+fn owner() []const u8 {
+
+    return if (catalog.home(home) != null) std.fs.path.basenamePosix(home) else "";
 
 }
 
@@ -933,6 +979,41 @@ fn copyPath() void {
     gui.display.copy(join(&target, entries[index].name) orelse return) catch |err| return report(err);
     status.content.label = "Path copied.";
     window.refresh();
+
+}
+
+fn pinChosen() void {
+
+    pin(true);
+
+}
+
+fn unpinChosen() void {
+
+    pin(false);
+
+}
+
+fn pin(on: bool) void {
+
+    var target: [514]u8 = undefined;
+
+    // The desktop says itself when it is full.
+    api.pin(pinning(&target, selected orelse return) orelse return, on) catch |err| if (err != error.Full) report(err);
+
+}
+
+fn pinned() bool {
+
+    var target: [514]u8 = undefined;
+
+    return catalog.placed(owner(), pinning(&target, selected orelse return false) orelse return false);
+
+}
+
+fn unpinned() bool {
+
+    return !pinned();
 
 }
 

@@ -101,6 +101,28 @@ var time = gui.label("", .{
 
 });
 
+var half = gui.label("", .{
+
+    .padding = .{
+
+        .bottom = 14,
+
+    },
+    .size = 24,
+    .color = theme.muted,
+
+});
+
+var clock_parts = [_]*gui.Node{ &time, &half };
+
+var clock = gui.box(.{
+
+    .direction = .row,
+    .gap = 8,
+    .items = .end,
+
+}, &clock_parts);
+
 var date = gui.label("", .{
 
     .size = 18,
@@ -157,7 +179,7 @@ var spacer = gui.box(.{
 
 }, &.{});
 
-var center_parts = [_]*gui.Node{ &time, &date, &spacer, &form };
+var center_parts = [_]*gui.Node{ &clock, &date, &spacer, &form };
 
 var center = gui.box(.{
 
@@ -348,8 +370,9 @@ fn tick() void {
     const today = api.Date.init(now);
 
     minute = now / 60;
-    time.content.label = std.fmt.bufPrint(&time_bytes, "{d:0>2}:{d:0>2}", .{ today.hour, today.minute }) catch "";
-    date.content.label = std.fmt.bufPrint(&date_bytes, "{s}, {d} {s}", .{ api.time.days[today.weekday], today.day, api.time.months[today.month - 1] }) catch "";
+    time.content.label = std.fmt.bufPrint(&time_bytes, "{d}:{d:0>2}", .{ today.twelve(), today.minute }) catch "";
+    half.content.label = today.half();
+    date.content.label = today.long(&date_bytes, false);
     greeter.refresh();
 
 }

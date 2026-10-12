@@ -7,9 +7,43 @@ const gui = @import("gui");
 
 const Image = api.abi.Image;
 
+/// The groups the launcher sorts apps into.
+pub const Category = enum {
+
+    productivity,
+    creative,
+    system,
+
+    pub fn title(self: Category) []const u8 {
+
+        return switch (self) {
+
+            .productivity => "Productivity",
+            .creative => "Creative",
+            .system => "System",
+
+        };
+
+    }
+
+    pub fn icon(self: Category) gui.Icon {
+
+        return switch (self) {
+
+            .productivity => .document,
+            .creative => .palette,
+            .system => .cpu,
+
+        };
+
+    }
+
+};
+
 pub const App = struct {
 
     image: Image,
+    category: Category,
     title: []const u8,
     icon: gui.Icon,
     summary: []const u8,
@@ -18,19 +52,116 @@ pub const App = struct {
 
 pub const apps = [_]App{
 
-    .{ .image = .explorer, .title = "Files", .icon = .folder, .summary = "Browse and organise your files" },
-    .{ .image = .editor, .title = "Editor", .icon = .edit, .summary = "Write text and code" },
-    .{ .image = .terminal, .title = "Terminal", .icon = .terminal, .summary = "Run OBSIDIAN shell commands" },
-    .{ .image = .viewer, .title = "Viewer", .icon = .image, .summary = "Look at pictures" },
-    .{ .image = .drawing, .title = "Drawing", .icon = .brush, .summary = "Sketch and paint pictures" },
-    .{ .image = .calculator, .title = "Calculator", .icon = .calculator, .summary = "Work out sums" },
-    .{ .image = .clock, .title = "Clock", .icon = .clock, .summary = "World time, stopwatch, and timer" },
-    .{ .image = .calendar, .title = "Calendar", .icon = .calendar, .summary = "Months, weeks, and holidays" },
-    .{ .image = .screenshots, .title = "Screenshots", .icon = .cut, .summary = "Snip the screen and keep your screenshots" },
-    .{ .image = .monitor, .title = "Monitor", .icon = .activity, .summary = "Watch processes, memory, and processors" },
-    .{ .image = .settings, .title = "Settings", .icon = .settings, .summary = "Display, appearance, and accounts" },
+    .{ .image = .explorer, .category = .system, .title = "Files", .icon = .folder, .summary = "Browse and organise your files" },
+    .{ .image = .editor, .category = .productivity, .title = "Editor", .icon = .edit, .summary = "Write text and code" },
+    .{ .image = .terminal, .category = .system, .title = "Terminal", .icon = .terminal, .summary = "Run OBSIDIAN shell commands" },
+    .{ .image = .viewer, .category = .creative, .title = "Viewer", .icon = .image, .summary = "Look at pictures" },
+    .{ .image = .drawing, .category = .creative, .title = "Drawing", .icon = .brush, .summary = "Sketch and paint pictures" },
+    .{ .image = .calculator, .category = .productivity, .title = "Calculator", .icon = .calculator, .summary = "Work out sums" },
+    .{ .image = .clock, .category = .productivity, .title = "Clock", .icon = .clock, .summary = "World time, stopwatch, and timer" },
+    .{ .image = .calendar, .category = .productivity, .title = "Calendar", .icon = .calendar, .summary = "Months, weeks, and holidays" },
+    .{ .image = .screenshots, .category = .creative, .title = "Screenshots", .icon = .cut, .summary = "Snip the screen and keep your screenshots" },
+    .{ .image = .monitor, .category = .system, .title = "Monitor", .icon = .activity, .summary = "Watch processes, memory, and processors" },
+    .{ .image = .settings, .category = .system, .title = "Settings", .icon = .settings, .summary = "Display, appearance, and accounts" },
 
 };
+
+/// The config the desktop keeps its pins in: `dock=` the dock's apps in order, and `item=COLUMN,ROW,TARGET` for each desktop item.
+/// A target is an app by image name, or an absolute path ending in `/` for a folder.
+pub const pins = "pins";
+
+/// The dock's apps until someone changes them.
+pub const docked = "explorer,settings";
+
+/// An item on the desktop, in its grid cell.
+pub const Item = struct {
+
+    column: u8,
+    row: u8,
+    target: []const u8,
+
+    /// Reads `COLUMN,ROW,TARGET` from the pins config.
+    pub fn parse(line: []const u8) ?Item {
+
+        var fields = std.mem.splitScalar(u8, line, ',');
+        const column = std.fmt.parseInt(u8, fields.next() orelse return null, 10) catch return null;
+        const row = std.fmt.parseInt(u8, fields.next() orelse return null, 10) catch return null;
+        const target = fields.rest();
+
+        if (target.len == 0) return null;
+
+        return .{
+
+            .column = column,
+            .row = row,
+            .target = target,
+
+        };
+
+    }
+
+};
+
+/// Whether `target` is on the desktop of user `owner`.
+pub fn placed(owner: []const u8, target: []const u8) bool {
+
+    shelf.open(owner, pins);
+
+    var lines = shelf.all("item");
+
+    while (lines.next()) |line| {
+
+        const item = Item.parse(line) orelse continue;
+        if (std.mem.eql(u8, item.target, target)) return true;
+
+    }
+
+    return false;
+
+}
+
+var shelf = api.Config{};
+
+/// The app `target` names, if it names one rather than a path.
+pub fn application(target: []const u8) ?*const App {
+
+    return find(std.meta.stringToEnum(Image, target) orelse return null);
+
+}
+
+pub fn folder(target: []const u8) bool {
+
+    return target.len > 1 and target[0] == '/' and target[target.len - 1] == '/';
+
+}
+
+/// What people call `target`: its app's title, or its file or folder name.
+pub fn named(target: []const u8) []const u8 {
+
+    if (application(target)) |app| return app.title;
+
+    return std.fs.path.basenamePosix(std.mem.trimRight(u8, target, "/"));
+
+}
+
+pub fn badge(target: []const u8) gui.Icon {
+
+    if (application(target)) |app| return app.icon;
+
+    return symbol(named(target), folder(target));
+
+}
+
+/// Opens `target`: an app on `inside`, a folder in Files, or a file in the app that reads it.
+pub fn open(target: []const u8, inside: []const u8) api.ServiceError!void {
+
+    if (application(target)) |app| return start(app.image, inside);
+    if (target.len < 2 or target[0] != '/') return error.Invalid;
+    if (folder(target)) return start(.explorer, target[0 .. target.len - 1]);
+
+    return start(opener(target), target);
+
+}
 
 /// Launches `image` with `argument`, the pointer showing busy until its window appears.
 pub fn start(image: Image, argument: []const u8) api.ServiceError!void {

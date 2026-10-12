@@ -572,8 +572,8 @@ fn clock_fill(seconds: u64) void {
 
     const today = api.Date.init(seconds);
 
-    digital.content.label = std.fmt.bufPrint(&digital_bytes, "{d:0>2}:{d:0>2}:{d:0>2}", .{ today.hour, today.minute, today.second }) catch "";
-    date.content.label = std.fmt.bufPrint(&date_bytes, "{s}, {d} {s} {d}", .{ time.days[today.weekday], today.day, time.months[today.month - 1], today.year }) catch "";
+    digital.content.label = today.clock(&digital_bytes, true);
+    date.content.label = today.long(&date_bytes, true);
     dial.invalidate();
     window.refresh();
 
@@ -641,7 +641,7 @@ fn world_fill(seconds: u64) void {
         const difference = minutes - offset;
         const day = if (there.day == today.day) "Today" else if (there.year > today.year or (there.year == today.year and (there.month > today.month or (there.month == today.month and there.day > today.day)))) "Tomorrow" else "Yesterday";
 
-        city_times[index].content.label = std.fmt.bufPrint(&city_time_bytes[index], "{d:0>2}:{d:0>2}", .{ there.hour, there.minute }) catch "";
+        city_times[index].content.label = there.clock(&city_time_bytes[index], false);
 
         city_notes[index].content.label = if (difference == 0) std.fmt.bufPrint(&city_note_bytes[index], "{s}, same time", .{day}) catch "" else std.fmt.bufPrint(&city_note_bytes[index], "{s}, {s}{d}{s} h", .{
 

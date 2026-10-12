@@ -55,6 +55,7 @@ pub const Operation = enum(u8) {
     notify,
     cursor,
     snip,
+    pin,
     _,
 
 };
