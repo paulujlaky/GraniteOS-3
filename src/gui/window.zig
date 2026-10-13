@@ -393,11 +393,19 @@ pub const Window = struct {
 
                 if (target != self.hovered) {
 
-                    if (self.hovered) |old| self.invalidate(old);
+                    if (self.hovered) |old| {
+
+                        self.invalidate(old);
+                        if (old.hover) |leave| leave(old, null);
+
+                    }
+
                     if (target) |new| self.invalidate(new);
                     self.hovered = target;
 
                 }
+
+                if (target) |over| if (over.hover) |glide| glide(over, at);
 
                 // A drag keeps the pointer it began with.
                 const holder = self.tracking orelse if (self.selecting) self.focused else target;
@@ -459,6 +467,9 @@ pub const Window = struct {
         if (event.pressed) {
 
             self.pressed = target;
+
+            // A press on nothing that clicks or follows the pointer lets go of the field being typed in.
+            if (target == null or !(target.?.focusable() or target.?.track != null)) self.focus(null);
 
             const new = target orelse return false;
             const now = api.ticks();
@@ -702,13 +713,13 @@ fn clipboard(edit: *text.Text, event: api.Event, multiline: bool) bool {
 
         };
 
-        if (event.chord(control, 'x')) _ = edit.erase();
+        if (event.chord(control, 'x') and !edit.fixed) _ = edit.erase();
 
         return true;
 
     }
 
-    if (!event.chord(control, 'v')) return false;
+    if (!event.chord(control, 'v') or edit.fixed) return false;
 
     const bytes = image.display.paste(&pasted) catch return true;
     const usable = if (multiline) bytes else bytes[0 .. @import("std").mem.indexOfAny(u8, bytes, "\r\n") orelse bytes.len];

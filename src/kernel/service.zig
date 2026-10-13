@@ -351,6 +351,17 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64, identity:
             task.environment.signal = message(task, nic.?.at, ethernet_line);
 
         },
+        .metrics => {
+
+            try task.configure(.service, &.{
+
+                .ipc, .time, .memory, .network, .diagnostics
+
+            });
+
+            try task.grant(.log, 0, 1);
+
+        },
         // Applications keep the default application policy, with the network for those granted it.
         else => if (image.networked()) try task.configure(.application, &.{
 

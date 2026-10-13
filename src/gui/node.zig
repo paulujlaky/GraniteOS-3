@@ -132,6 +132,10 @@ pub const Node = struct {
     /// Runs on a right-click, or Shift+F10 while focused, with where its menu should open in surface coordinates; see `gui.Menu`.
     menu: ?*const fn (*Node, Point) void = null,
 
+    /// Follows the pointer while it moves over the node with no button held, then runs with null as it leaves, such as for
+    /// a chart's readout.
+    hover: ?*const fn (*Node, ?Point) void = null,
+
     /// What the pointer shows over the node, when not what `pointer` picks.
     cursor: ?Cursor = null,
 
@@ -456,7 +460,7 @@ pub const Node = struct {
 
     }
 
-    /// The deepest focusable or tracking node under `point`.
+    /// The deepest focusable, tracking, or hovering node under `point`.
     pub fn hit(self: *Node, point: Point) ?*Node {
 
         if (!self.shown() or !self.rect.contains(point)) return null;
@@ -476,7 +480,7 @@ pub const Node = struct {
 
         }
 
-        return if (self.focusable() or self.track != null) self else null;
+        return if (self.focusable() or self.track != null or self.hover != null) self else null;
 
     }
 

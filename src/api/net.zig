@@ -6,7 +6,14 @@ const std = @import("std");
 const api = @import("root.zig");
 
 const protocol = api.protocol;
-pub const NetError = api.ServiceError || error{ Offline, Refused };
+pub const NetError = api.ServiceError || error{ Offline, Refused, Cancelled };
+
+/// Runs while a socket waits to read or write, every few ticks rather than once the service's patience runs out, so an
+/// app with one thread keeps painting and answering; an error it returns, such as `error.Cancelled`, ends the wait with it.
+pub var idle: ?*const fn () NetError!void = null;
+
+/// Set in a socket's handle to ask the service to answer a read or write within a few ticks, with nothing if need be.
+pub const hasty: u56 = 1 << 55;
 
 /// An IPv4 address, most significant octet first.
 pub const Address = extern struct {
@@ -294,8 +301,9 @@ pub const Socket = struct {
 
         while (true) {
 
-            const count = try request(.read, @intCast(self.handle), out);
+            const count = try request(.read, self.waiting(), out);
             if (count != protocol.empty) return count;
+            if (idle) |run| try run();
 
         }
 
@@ -310,11 +318,18 @@ pub const Socket = struct {
 
             // The service only reads the window it is lent.
             const chunk = @constCast(bytes[done..][0..@min(bytes.len - done, 0x10000)]);
-            const count = try request(.write, @intCast(self.handle), chunk);
+            const count = try request(.write, self.waiting(), chunk);
 
-            if (count != protocol.empty) done += count;
+            if (count != protocol.empty) done += count else if (idle) |run| try run();
 
         }
+
+    }
+
+    /// The handle for a read or write, hasty while `idle` waits to run.
+    fn waiting(self: Socket) u56 {
+
+        return @as(u56, @intCast(self.handle)) | if (idle != null) hasty else 0;
 
     }
 

@@ -1030,24 +1030,7 @@ fn report(name: []const u8, err: api.ServiceError) Error!void {
 /// Reports why a network command failed.
 fn fail(name: []const u8, err: api.http.HttpError) Error!void {
 
-    const reason = switch (err) {
-
-        error.Offline => "network unavailable",
-        error.Refused => "connection refused",
-        error.Timeout => "timed out",
-        error.Missing => "not found",
-        error.Denied => "permission denied",
-        error.Full, error.Exhausted => "out of connections or memory",
-        error.Untrusted => "certificate not trusted",
-        error.Malformed, error.Unsupported => "unexpected address or response",
-        error.Redirects => "too many redirects",
-        error.Broken => "connection broken",
-        error.Invalid => "invalid argument",
-        else => "network service unavailable",
-
-    };
-
-    try terminal.print("{s}: {s}\n", .{ name, reason });
+    try terminal.print("{s}: {s}\n", .{ name, api.http.reason(err) });
 
 }
 

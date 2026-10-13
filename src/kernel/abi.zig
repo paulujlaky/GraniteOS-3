@@ -89,35 +89,40 @@ pub const Image = enum(u64) {
     drawing,
     screenshots,
     net,
+    metrics,
+    weather,
+    requests,
 
     /// Runs with application permissions rather than as a service.
     pub fn application(self: Image) bool {
 
         return switch (self) {
 
-            .serial, .helper, .storage, .files, .accounts, .install, .display, .input, .usb, .net => false,
+            .serial, .helper, .storage, .files, .accounts, .install, .display, .input, .usb, .net, .metrics => false,
             else => true,
 
         };
 
     }
 
-    /// An application granted `network`: the shell's tools, and the desktop, Settings, and Monitor, which show its state.
+    /// An application granted `network`: the shell's tools, the desktop, Settings, and Monitor, which show its state, and the
+    /// apps that work over it.
     pub fn networked(self: Image) bool {
 
         return switch (self) {
 
-            .shell, .login, .settings, .monitor => true,
+            .shell, .login, .settings, .monitor, .weather, .requests => true,
             else => false,
 
         };
 
     }
 
-    /// The permission a process needs before it may be connected to this service.
+    /// The permission a process needs before it may be connected to this service; where the computer is counts too, as an
+    /// app on the network could learn it anyway.
     pub fn gate(self: Image) ?Permission {
 
-        return if (self == .net) .network else null;
+        return if (self == .net or self == .metrics) .network else null;
 
     }
 

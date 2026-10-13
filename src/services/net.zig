@@ -30,6 +30,9 @@ const datagrams = 16 * 1024;
 /// Ticks a request waits on the network before it is answered anyway, well inside its caller's own timeout.
 const patience = 800;
 
+/// Ticks a hasty read or write waits, for apps that keep painting between waits.
+const brief = 5;
+
 /// The largest TCP segment we take, filling one Ethernet frame.
 const mss = wire.mtu - wire.ip_length - wire.tcp_length;
 
@@ -425,9 +428,9 @@ fn handle(request: api.Request) ?u64 {
         .echo => echo(request, @truncate(value)),
         .connect => connect(request, value),
         .listen => listen(request, @truncate(value)),
-        .accept => wait(request, value, .accept),
-        .read => wait(request, value, .read),
-        .write => wait(request, value, .write),
+        .accept => wait(request, value, .accept, false),
+        .read => wait(request, value & ~net.hasty, .read, (value & net.hasty) != 0),
+        .write => wait(request, value & ~net.hasty, .write, (value & net.hasty) != 0),
         .close => close(request, value),
         else => protocol.invalid,
 
@@ -715,7 +718,7 @@ fn connect(request: api.Request, value: u56) ?u64 {
 
     socket.connection.open(socket.local_port, port, random(u32), mss);
     pump(socket);
-    hold(socket, request, .connect);
+    hold(socket, request, .connect, false);
 
     return null;
 
@@ -743,14 +746,14 @@ fn listen(request: api.Request, port: u16) u64 {
 }
 
 /// Holds a read, write, or accept until it can be answered.
-fn wait(request: api.Request, handle_value: u64, kind: Wait) ?u64 {
+fn wait(request: api.Request, handle_value: u64, kind: Wait, hasty: bool) ?u64 {
 
     const socket = find(request, handle_value) orelse return protocol.missing;
 
     if (socket.wait != .none) return protocol.busy;
     if ((kind == .accept) != (socket.kind == .listener)) return protocol.invalid;
 
-    hold(socket, request, kind);
+    hold(socket, request, kind, hasty);
     settle(socket);
 
     return null;
@@ -874,11 +877,11 @@ fn find(request: api.Request, value: u64) ?*Socket {
 
 }
 
-fn hold(socket: *Socket, request: api.Request, kind: Wait) void {
+fn hold(socket: *Socket, request: api.Request, kind: Wait, hasty: bool) void {
 
     socket.waiter = request;
     socket.wait = kind;
-    socket.until = api.ticks() + patience;
+    socket.until = api.ticks() + @as(u64, if (hasty) brief else patience);
 
 }
 

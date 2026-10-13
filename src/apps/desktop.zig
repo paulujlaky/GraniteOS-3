@@ -255,6 +255,7 @@ pub fn start(name: []const u8) void {
     bar.show();
     dock.window.show();
     reload(.all);
+    controls.load(name);
     claim();
     refresh();
 
@@ -283,6 +284,7 @@ pub fn stop() void {
     bar.hide();
     dock.window.hide();
     pins.load("");
+    controls.load("");
 
     gui.display.reserve(0, 0) catch {
 
@@ -658,6 +660,8 @@ fn shutdown() void {
 /// Shows Quartz and, unless only that changed, the wallpaper as the user chose in Settings: granite when there is none or it will
 /// not load.
 fn reload(what: catalog.Reload) void {
+
+    if (what == .weather) return controls.load(user_label.content.label);
 
     preferences.open(user_label.content.label, "desktop");
     translucent = !std.mem.eql(u8, preferences.get("quartz") orelse "", "off");

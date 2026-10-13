@@ -1,9 +1,11 @@
-//! Quick settings under the bar's date and time: the time and date, a month calendar to page through, and a switch for
-//! each setting, starting with the network.
+//! Quick settings under the bar's date and time: the time and date, the weather where Weather last looked, a month calendar
+//! to page through, and a switch for each setting, starting with the network.
 
 const std = @import("std");
 
 const days = @import("days.zig");
+const desktop = @import("desktop.zig");
+const forecast = @import("forecast.zig");
 
 const api = @import("api");
 const gui = @import("gui");
@@ -116,10 +118,91 @@ var header_parts = [_]*gui.Node{ &hour_row, &date };
 
 var header = gui.box(.{
 
-    .padding = .axes(2, 6),
+    .padding = .{
+
+        .top = 6,
+        .right = 6,
+        .bottom = 2,
+        .left = 6,
+
+    },
     .gap = 2,
 
 }, &header_parts);
+
+// The weather, which opens Weather.
+var place = gui.label("", theme.caption);
+var degrees_bytes: [16]u8 = undefined;
+
+var degrees = gui.label("", .{
+
+    .size = 28,
+
+});
+
+var sky = gui.label("", .{
+
+    .padding = .{
+
+        .bottom = 4,
+
+    },
+    .color = theme.muted,
+
+});
+
+var reading_parts = [_]*gui.Node{ &degrees, &sky };
+
+var reading = gui.box(.{
+
+    .direction = .row,
+    .gap = 8,
+    .items = .end,
+
+}, &reading_parts);
+
+var outlook_parts = [_]*gui.Node{ &place, &reading };
+
+var outlook = gui.box(.{
+
+    .grow = 1,
+    .gap = 2,
+
+}, &outlook_parts);
+
+var sky_icon = gui.icon(.sun, theme.icon.with(.{
+
+    .width = 44,
+    .height = 44,
+    .size = 34,
+
+}));
+
+var weather_parts = [_]*gui.Node{ &outlook, &sky_icon };
+
+var weather = gui.box(card.with(.{
+
+    .padding = gui.Edges.axes(10, 12),
+    .direction = .row,
+    .gap = 10,
+    .items = .center,
+
+    .hover = .{
+
+        .background = gui.shade(0xffffff, 18),
+
+    },
+
+}), &weather_parts);
+
+/// Whose brief the card shows, empty while no one is signed in, and the unit they read it in.
+var owner: []const u8 = "";
+var brief: ?forecast.Brief = null;
+var unit = forecast.Unit.fahrenheit;
+var settings = api.Config{};
+
+/// When Weather was last started to refresh the brief, in `api.clock` seconds.
+var asked: u64 = 0;
 
 // The calendar.
 var month_bytes: [24]u8 = undefined;
@@ -205,7 +288,7 @@ var switches = gui.box(card.with(.{
 
 }), &row_list);
 
-var root_parts = [_]*gui.Node{ &header, &calendar, &switches };
+var root_parts = [_]*gui.Node{ &header, &weather, &calendar, &switches };
 
 var root = gui.box(theme.popup.with(.{
 
@@ -229,6 +312,7 @@ var due: u64 = 0;
 pub fn init() void {
 
     month.action = &current;
+    weather.action = &look;
 
     for (&heads, 0..) |*head, index| {
 
@@ -391,8 +475,20 @@ pub fn show(at: gui.Point) void {
     corner = at;
     now = Day.today();
     page = first(now);
+    renew(10 * 60, 60);
     refresh();
     window.show();
+
+}
+
+/// Reads the brief and unit of user `name` again, as after Weather changed them; an empty name clears the card.
+pub fn load(name: []const u8) void {
+
+    owner = name;
+    brief = if (name.len == 0) null else forecast.Brief.load(name);
+    settings.open(name, forecast.config);
+    unit = forecast.Unit.read(&settings);
+    if (shown()) refresh();
 
 }
 
@@ -408,10 +504,32 @@ pub fn shown() bool {
 
 }
 
-/// Keeps an open panel's time and switches current, every second; call it every pass of the event loop.
+/// Keeps an open panel's time and switches current, every second, and the brief fresh; call it every pass of the event loop.
 pub fn tick() void {
 
+    renew(30 * 60, 10 * 60);
     if (shown() and api.ticks() >= due) refresh();
+
+}
+
+/// Starts Weather without a window to refresh the brief once it is `age` seconds old, at most once every `gap` seconds.
+fn renew(age: u64, gap: u64) void {
+
+    const moment = api.clock();
+
+    if (owner.len == 0 or moment < asked + gap) return;
+    if (brief) |known| if (moment < known.updated + age) return;
+
+    asked = moment;
+
+    const state = api.net.status() catch return;
+    if (!state.online()) return;
+
+    var argument: [80]u8 = undefined;
+
+    _ = api.launch(@tagName(api.abi.Image.weather), std.fmt.bufPrint(&argument, "{s}{s}", .{ forecast.quiet, desktop.home }) catch return) catch {
+
+    };
 
 }
 
@@ -434,6 +552,18 @@ fn refresh() void {
     }
 
     fill();
+    weather.hidden = brief == null;
+
+    if (brief) |*known| {
+
+        const seen = forecast.sky(known.code, known.day);
+
+        sky_icon.content.label = seen.icon.text();
+        degrees.content.label = unit.temperature(&degrees_bytes, known.temperature);
+        sky.content.label = seen.title;
+        place.content.label = api.metrics.text(&known.place);
+
+    }
 
     for (tiles, 0..) |tile, index| {
 
@@ -529,6 +659,27 @@ fn current(_: *gui.Node) void {
 
     page = first(now);
     refresh();
+
+}
+
+/// Brings Weather forward, starting it when it is not open.
+fn look(_: *gui.Node) void {
+
+    desktop.dismiss();
+
+    for (desktop.listed[0..desktop.count]) |*listed| {
+
+        if (listed.application != @intFromEnum(api.abi.Image.weather)) continue;
+
+        gui.display.activate(listed.id, .raise) catch {
+
+        };
+
+        return;
+
+    }
+
+    desktop.start_app(.weather, desktop.home);
 
 }
 

@@ -68,6 +68,7 @@ pub const Operation = enum(u8) {
     echo,
     roots,
     enable,
+    locate,
     _,
 
 };

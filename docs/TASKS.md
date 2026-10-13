@@ -56,6 +56,7 @@
 
 - [x] Ethernet and VMware networking support (e1000e; the desktop's I219-V awaits physical validation).
 - [x] TCP/IP, automatic configuration, DNS, and HTTP/HTTPS transfers.
+- [x] Network apps: Weather (with a quick settings card) and Requests, over a shared location service.
 - [ ] Audio output on supported physical and virtual hardware.
 - [ ] Document and code editing.
 - [ ] Audio/video playback.

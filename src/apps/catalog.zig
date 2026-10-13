@@ -12,6 +12,7 @@ pub const Category = enum {
 
     productivity,
     creative,
+    internet,
     system,
 
     pub fn title(self: Category) []const u8 {
@@ -20,6 +21,7 @@ pub const Category = enum {
 
             .productivity => "Productivity",
             .creative => "Creative",
+            .internet => "Internet",
             .system => "System",
 
         };
@@ -32,6 +34,7 @@ pub const Category = enum {
 
             .productivity => .document,
             .creative => .palette,
+            .internet => .globe,
             .system => .cpu,
 
         };
@@ -40,11 +43,13 @@ pub const Category = enum {
 
 };
 
-/// What Settings changed in the `desktop` config, so the desktop reads only that again; sent with `reload`.
+/// What an app changed, so the desktop reads only that again; sent with `reload`. Settings changes the `desktop` config, and
+/// Weather the brief the quick settings show.
 pub const Reload = enum(u8) {
 
     all,
     quartz,
+    weather,
 
 };
 
@@ -69,6 +74,8 @@ pub const apps = [_]App{
     .{ .image = .clock, .category = .productivity, .title = "Clock", .icon = .clock, .summary = "World time, stopwatch, and timer" },
     .{ .image = .calendar, .category = .productivity, .title = "Calendar", .icon = .calendar, .summary = "Months, weeks, and holidays" },
     .{ .image = .screenshots, .category = .creative, .title = "Screenshots", .icon = .cut, .summary = "Snip the screen and keep your screenshots" },
+    .{ .image = .weather, .category = .internet, .title = "Weather", .icon = .cloud_sun, .summary = "Conditions and forecasts where you are" },
+    .{ .image = .requests, .category = .internet, .title = "Requests", .icon = .send, .summary = "Send HTTP requests and read the replies" },
     .{ .image = .monitor, .category = .system, .title = "Monitor", .icon = .activity, .summary = "Watch processes, memory, and processors" },
     .{ .image = .settings, .category = .system, .title = "Settings", .icon = .settings, .summary = "Display, appearance, and accounts" },
 

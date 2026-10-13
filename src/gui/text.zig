@@ -17,6 +17,9 @@ pub const Text = struct {
     placeholder: []const u8 = "",
     secret: bool = false,
 
+    /// Selected and copied but never edited by keys or the clipboard, such as a response shown.
+    fixed: bool = false,
+
     /// First visible line of multi-line text, and how far single-line text scrolled left, in pixels.
     top: usize = 0,
     left: i32 = 0,
@@ -147,6 +150,15 @@ pub const Text = struct {
         if (event.kind != .key or !event.pressed) return false;
 
         const jump = event.modifiers.control;
+
+        if (self.fixed and !event.chord(.{ .control = true }, 'a')) switch (event.key()) {
+
+            .character, .enter, .tab, .backspace, .delete => return false,
+            else => {
+
+            },
+
+        };
 
         switch (event.key()) {
 
