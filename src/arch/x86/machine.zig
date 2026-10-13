@@ -50,8 +50,9 @@ pub var cores: ?*Core = null;
 pub var kernel: paging.Space = undefined;
 pub var core_count: usize = 0;
 
-/// ISA interrupt `n` arrives as vector `legacy + n`.
+/// Device interrupt line `n` arrives as vector `legacy + n`: ISA's sixteen, then message-signalled ones up to `lines`.
 pub const legacy = 48;
+pub const lines = 32;
 
 /// Interrupts an idle processor so it picks up a process that became ready, rather than at its next timer tick.
 pub const wake = 0xf0;
@@ -275,6 +276,13 @@ pub fn route(irq: u4, target: u32) !void {
     try kernel.identity(address, 4096, paging.writable | paging.nx | paging.uncached);
     try kernel.protect(address, paging.writable | paging.nx | paging.uncached);
     if (!apic.redirect(line, legacy + @as(u8, irq), target)) return error.NoDevice;
+
+}
+
+/// The address and data a device writes to raise message-signalled line `line` on processor `target`.
+pub fn message(line: u5, target: u32) struct { u64, u16 } {
+
+    return .{ 0xfee00000 | @as(u64, target & 0xff) << 12, legacy + @as(u16, line) };
 
 }
 

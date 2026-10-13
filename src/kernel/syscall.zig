@@ -65,14 +65,15 @@ noinline fn invoke(task: *process.Process, ticks: u64, frame: *abi.Request) Call
         },
         .receive => {
 
+            // `second`, when not zero, bounds a blocking receive to that many ticks.
             if (!task.policy.permits(.ipc)) return error.Denied;
-            if (frame.first > 1) return error.Invalid;
+            if (frame.first > 1 or frame.second > schedule.longest) return error.Invalid;
 
             if (frame.first == 1) {
 
                 if (!ipc.poll(task)) return error.NoProcess;
 
-            } else if (ipc.receive(task)) return .block;
+            } else if (ipc.receive(task, if (frame.second == 0) 0 else ticks + frame.second)) return .block;
 
             frame.* = task.context.request();
             frame.number = 0;

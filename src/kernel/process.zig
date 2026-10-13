@@ -11,6 +11,10 @@ const paging = arch.paging;
 const Node = std.DoublyLinkedList.Node;
 pub const State = abi.State;
 
+/// The stack grows down from its top to the read-only environment page, which stops an overflow; heap allocations stay below both.
+const stack_top = paging.user_end - 4096;
+const environment_address = paging.user_end - 0x100000;
+
 pub const Right = enum {
 
     send,
@@ -55,7 +59,7 @@ pub const Process = struct {
     buffer: u64 = 0,
     length: u64 = 0,
 
-    /// Device interrupts raised since the last `receive`, one bit per ISA line.
+    /// Device interrupts raised since the last `receive`, one bit per interrupt line.
     signals: u64 = 0,
 
     /// Guards its capabilities, signals, and callers, and its state unless it waits on a server, whose lock guards that instead.
@@ -97,8 +101,6 @@ pub const Process = struct {
 
     pub fn create(kernel: paging.Space, bytes: []const u8, id: u64, argument: usize, home: u32) !*Process {
 
-        const stack_top = paging.user_end - 4096;
-        const environment_address = paging.user_end - 0x10000;
         const image = try elf.Image.parse(bytes, paging.user_base, paging.user_base + 0x10000000);
 
         const address = try kernel.frames.alloc();
@@ -132,7 +134,7 @@ pub const Process = struct {
 
         }
 
-        // 56 KiB of stack reaches down to the read-only environment page, which stops an overflow.
+        // 56 KiB of stack to start with; `grow` adds more as faults reach under it.
         for (0..14) |index| {
 
             _ = try space.allocate(stack_top - (index + 1) * 4096, paging.user | paging.writable | paging.nx);
@@ -230,6 +232,16 @@ pub const Process = struct {
         };
 
         self.capabilities = capability;
+
+    }
+
+    /// Maps a fresh stack page at `address` when a fault there means the stack grew; false for any other fault.
+    pub fn grow(self: *Process, address: usize) bool {
+
+        if (address < environment_address + 4096 or address >= stack_top or self.space.present(address)) return false;
+        _ = self.space.allocate(address & ~@as(usize, 4095), paging.user | paging.writable | paging.nx) catch return false;
+
+        return true;
 
     }
 

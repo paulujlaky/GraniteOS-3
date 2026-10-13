@@ -1,4 +1,4 @@
-//! Monitor: processor and memory use over time, and every running process.
+//! Monitor: processor, memory, and network use over time, and every running process.
 
 const std = @import("std");
 
@@ -24,6 +24,13 @@ var previous = api.abi.Summary{};
 /// Recent processor and memory use, from 0 to 1, oldest first.
 var processor_history = [_]f32{0} ** span;
 var memory_history = [_]f32{0} ** span;
+
+/// Network traffic each second in bytes, and scaled to the busiest second shown.
+var traffic = [_]f32{0} ** span;
+var network_history = [_]f32{0} ** span;
+var transferred: ?u64 = null;
+var counts: [64]api.net.Count = undefined;
+var count_length: usize = 0;
 
 const Card = struct {
 
@@ -76,6 +83,7 @@ const Card = struct {
 
 var processor: Card = undefined;
 var memory: Card = undefined;
+var network: Card = undefined;
 
 var cards = gui.box(.{
 
@@ -85,7 +93,7 @@ var cards = gui.box(.{
 
 }, &.{});
 
-var card_parts: [2]*gui.Node = undefined;
+var card_parts: [3]*gui.Node = undefined;
 
 const columns = [_]struct { title: []const u8, width: ?i32 }{
 
@@ -95,6 +103,7 @@ const columns = [_]struct { title: []const u8, width: ?i32 }{
     .{ .title = "State", .width = 80 },
     .{ .title = "Memory", .width = 80 },
     .{ .title = "CPU", .width = 60 },
+    .{ .title = "Connections", .width = 90 },
 
 };
 
@@ -140,7 +149,8 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
     processor.init("Processors", &processor_history);
     memory.init("Memory", &memory_history);
-    card_parts = .{ &processor.node, &memory.node };
+    network.init("Network", &network_history);
+    card_parts = .{ &processor.node, &memory.node, &network.node };
     cards.content.box = &card_parts;
 
     for (columns, 0..) |column, index| {
@@ -193,7 +203,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         .title = "Monitor",
         .application = .monitor,
 
-        .width = 760,
+        .width = 900,
         .height = 560,
 
     }) catch api.exit(3);
@@ -246,6 +256,7 @@ fn sample() void {
     processor.detail.content.label = std.fmt.bufPrint(&processor.detail_bytes, "{d} processors, {d} processes", .{ summary.processors, summary.processes }) catch "";
     memory.value.content.label = std.fmt.bufPrint(&memory.bytes, "{d} MB", .{used * 4 / 1024}) catch "";
     memory.detail.content.label = std.fmt.bufPrint(&memory.detail_bytes, "of {d} MB, {d} MB free", .{ summary.pages * 4 / 1024, summary.free * 4 / 1024 }) catch "";
+    sampleNetwork();
 
     // The busiest processes come first.
     std.sort.insertion(Usage, records[0..count], {}, busier);
@@ -266,6 +277,7 @@ fn sample() void {
             @tagName(record.state),
             std.fmt.bufPrint(&cell_bytes[index][4], "{d} KB", .{record.pages * 4}) catch "",
             std.fmt.bufPrint(&cell_bytes[index][5], "{d:.1}%", .{cpu}) catch "",
+            connections(record.id, &cell_bytes[index][6]),
 
         };
 
@@ -277,6 +289,49 @@ fn sample() void {
     before_count = count;
     previous = summary;
     window.refresh();
+
+}
+
+/// Reads the network's traffic counters and each process's connections; traffic is graphed against the busiest second shown.
+fn sampleNetwork() void {
+
+    count_length = api.net.connections(&counts) catch 0;
+
+    const state = api.net.status() catch {
+
+        network.value.content.label = "None";
+        network.detail.content.label = "No network controller";
+        return;
+
+    };
+
+    const total = state.received + state.sent;
+    const rate = if (transferred) |last| total -| last else 0;
+
+    transferred = total;
+    std.mem.copyForwards(f32, traffic[0 .. span - 1], traffic[1..]);
+    traffic[span - 1] = @floatFromInt(rate);
+
+    const busiest = @max(std.mem.max(f32, &traffic), 1024);
+
+    for (&network_history, traffic) |*scaled, bytes| scaled.* = bytes / busiest;
+    network.plot.invalidate();
+
+    network.value.content.label = std.fmt.bufPrint(&network.bytes, "{d} KB/s", .{rate / 1024}) catch "";
+    network.detail.content.label = if (!state.online()) "Not connected" else std.fmt.bufPrint(&network.detail_bytes, "{f}, {d} connections", .{ state.address, state.connections }) catch "";
+
+}
+
+/// How many connections process `id` holds, written into `bytes`; blank for none.
+fn connections(id: u64, bytes: []u8) []const u8 {
+
+    for (counts[0..count_length]) |entry| {
+
+        if (entry.process == id) return std.fmt.bufPrint(bytes, "{d}", .{entry.connections}) catch "";
+
+    }
+
+    return "";
 
 }
 

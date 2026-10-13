@@ -95,7 +95,7 @@ const groups = [_]Group{
         .title = "services",
         .commands = &.{
 
-            command("ping", "Call the helper service", ping),
+            command("hello", "Call the helper service", hello),
             command("crash NAME", "Crash a service (administrators)", crash),
             command("restart NAME", "Restart a service (administrators)", restart),
 
@@ -115,6 +115,18 @@ const groups = [_]Group{
             command("rm PATH", "Remove a file or empty directory", rm),
             command("chmod MODE PATH", "Set owner and other permissions (octal)", chmod),
             command("volume", "Show volume capacity and free space", volume),
+
+        },
+
+    },
+    .{
+
+        .title = "network",
+        .commands = &.{
+
+            command("ping HOST", "Send a host four echo requests", ping),
+            command("lookup NAME", "Find the address a name stands for", lookup),
+            command("get URL [PATH]", "Download over HTTP or HTTPS into a file", get),
 
         },
 
@@ -821,10 +833,10 @@ fn power(value: u56, message: []const u8) Error!void {
 
 }
 
-fn ping(_: []const u8) Error!void {
+fn hello(_: []const u8) Error!void {
 
-    const helper = api.lookup(terminal.supervisor, .helper) catch return terminal.write("ping: helper unavailable\n");
-    const value = api.call(helper, protocol.pack(.ping, 41)) catch return terminal.write("ping: helper disconnected\n");
+    const helper = api.lookup(terminal.supervisor, .helper) catch return terminal.write("hello: helper unavailable\n");
+    const value = api.call(helper, protocol.pack(.ping, 41)) catch return terminal.write("hello: helper disconnected\n");
 
     try terminal.print("{d}\n", .{value});
 
@@ -1012,6 +1024,88 @@ fn report(name: []const u8, err: api.ServiceError) Error!void {
     };
 
     try terminal.print("{s}: {s}\n", .{ name, reason });
+
+}
+
+/// Reports why a network command failed.
+fn fail(name: []const u8, err: api.http.HttpError) Error!void {
+
+    const reason = switch (err) {
+
+        error.Offline => "network unavailable",
+        error.Refused => "connection refused",
+        error.Timeout => "timed out",
+        error.Missing => "not found",
+        error.Denied => "permission denied",
+        error.Full, error.Exhausted => "out of connections or memory",
+        error.Untrusted => "certificate not trusted",
+        error.Malformed, error.Unsupported => "unexpected address or response",
+        error.Redirects => "too many redirects",
+        error.Broken => "connection broken",
+        error.Invalid => "invalid argument",
+        else => "network service unavailable",
+
+    };
+
+    try terminal.print("{s}: {s}\n", .{ name, reason });
+
+}
+
+fn ping(argument: []const u8) Error!void {
+
+    if (argument.len == 0) return error.Usage;
+
+    const address = api.net.resolve(argument) catch |err| return fail("ping", err);
+
+    try terminal.print("Pinging {s} ({f})\n", .{ argument, address });
+
+    for (0..4) |round| {
+
+        if (round != 0) api.sleep(100);
+
+        const time = api.net.echo(address) catch |err| {
+
+            try fail("ping", err);
+            continue;
+
+        };
+
+        try terminal.print("Reply from {f}: {d}.{d:0>2} ms\n", .{ address, time / 1000, time % 1000 / 10 });
+
+    }
+
+}
+
+fn lookup(argument: []const u8) Error!void {
+
+    if (argument.len == 0) return error.Usage;
+
+    const address = api.net.resolve(argument) catch |err| return fail("lookup", err);
+
+    try terminal.print("{s} is {f}\n", .{ argument, address });
+
+}
+
+/// Downloads a URL into a file, named after the URL's last path part unless given.
+fn get(argument: []const u8) Error!void {
+
+    const split = std.mem.indexOfScalar(u8, argument, ' ') orelse argument.len;
+    const url = argument[0..split];
+    const parsed = api.http.Url.parse(url) orelse return error.Usage;
+    const given = std.mem.trim(u8, argument[split..], " ");
+    const named = std.fs.path.basenamePosix(parsed.target[0 .. std.mem.indexOfScalar(u8, parsed.target, '?') orelse parsed.target.len]);
+    const path = try resolve(if (given.len != 0) given else if (named.len != 0) named else "index.html");
+
+    var body = std.Io.Writer.Allocating.init(api.pages);
+
+    defer body.deinit();
+
+    const code = api.http.get(api.pages, url, &body.writer) catch |err| return fail("get", err);
+
+    if (code < 200 or code >= 300) return terminal.print("get: the server answered {d}\n", .{code});
+
+    files.save(api.pages, path, body.written()) catch |err| return report("get", err);
+    try terminal.print("Saved {d} bytes to {s}\n", .{ body.written().len, path });
 
 }
 

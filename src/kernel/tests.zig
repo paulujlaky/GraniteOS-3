@@ -268,7 +268,7 @@ fn task(id: u64) process.Process {
             .length = abi.permission_count,
             .permissions = .{
 
-                .ipc, .memory, .time, .ports, .mmio, .power, .diagnostics, .management, .dma, .accounts, .firmware
+                .ipc, .memory, .time, .ports, .mmio, .power, .diagnostics, .management, .dma, .accounts, .firmware, .network
 
             },
 
@@ -397,7 +397,7 @@ test "RPC authenticates one-shot replies and cancels both phases on peer death" 
     try std.testing.expectEqual(42, client.context.request().first);
     try std.testing.expectError(error.InvalidReply, ipc.reply(&processes, &server, 1, ticket, 42));
 
-    try std.testing.expect(ipc.receive(&server));
+    try std.testing.expect(ipc.receive(&server, 0));
     try ipc.call(&processes, &client, 2, 43, 100);
     try std.testing.expectEqual(.replying, client.state);
     try std.testing.expectError(error.InvalidReply, ipc.reply(&processes, &server, 1, ticket, 42));
@@ -436,7 +436,7 @@ test "RPC deadlines release queued and delivered calls without reviving stale re
     try std.testing.expectEqual(6, client.context.request().number);
     try std.testing.expect(!ipc.poll(&server));
 
-    try std.testing.expect(ipc.receive(&server));
+    try std.testing.expect(ipc.receive(&server, 0));
     try ipc.call(&processes, &client, 2, 1, 20);
     const ticket = server.context.request().third;
 
@@ -495,12 +495,12 @@ test "IPC rendezvous preserves sender identity and wakes blocked peers" {
 
     try std.testing.expect(try ipc.send(&processes, &sender, 2, 123));
     try std.testing.expectEqual(.sending, sender.state);
-    try std.testing.expect(!ipc.receive(&receiver));
+    try std.testing.expect(!ipc.receive(&receiver, 0));
     try std.testing.expectEqual(.ready, sender.state);
     try std.testing.expectEqual(1, receiver.context.request().first);
     try std.testing.expectEqual(123, receiver.context.request().second);
     try std.testing.expectEqual(sender.identity, @as(abi.Identity, @bitCast(receiver.context.request().fifth)));
-    try std.testing.expect(ipc.receive(&receiver));
+    try std.testing.expect(ipc.receive(&receiver, 0));
     try std.testing.expectEqual(.receiving, receiver.state);
     try std.testing.expect(!try ipc.send(&processes, &sender, 2, 456));
     try std.testing.expectEqual(.ready, receiver.state);
@@ -536,12 +536,12 @@ test "IPC rejects wait cycles and serves senders in arrival order" {
     try std.testing.expectError(error.Deadlock, ipc.send(&processes, &first, 1, 0));
     _ = try ipc.send(&processes, &first, 2, 1);
     try std.testing.expectError(error.Deadlock, ipc.send(&processes, &second, 1, 2));
-    _ = ipc.receive(&second);
+    _ = ipc.receive(&second, 0);
     _ = try ipc.send(&processes, &second, 3, 20);
     _ = try ipc.send(&processes, &first, 3, 10);
-    _ = ipc.receive(&receiver);
+    _ = ipc.receive(&receiver, 0);
     try std.testing.expectEqual(20, receiver.context.request().second);
-    _ = ipc.receive(&receiver);
+    _ = ipc.receive(&receiver, 0);
     try std.testing.expectEqual(10, receiver.context.request().second);
 
 }
@@ -562,7 +562,7 @@ test "interrupts wake a receiving service and coalesce while it is busy" {
 
     sender.capabilities = &grant;
 
-    try std.testing.expect(ipc.receive(&service));
+    try std.testing.expect(ipc.receive(&service, 0));
     ipc.signal(&service, 1 << 12);
     try std.testing.expectEqual(.ready, service.state);
     try std.testing.expectEqual(0, service.context.request().first);

@@ -88,16 +88,36 @@ pub const Image = enum(u64) {
     calendar,
     drawing,
     screenshots,
+    net,
 
     /// Runs with application permissions rather than as a service.
     pub fn application(self: Image) bool {
 
         return switch (self) {
 
-            .serial, .helper, .storage, .files, .accounts, .install, .display, .input, .usb => false,
+            .serial, .helper, .storage, .files, .accounts, .install, .display, .input, .usb, .net => false,
             else => true,
 
         };
+
+    }
+
+    /// An application granted `network`: the shell's tools, and the desktop, Settings, and Monitor, which show its state.
+    pub fn networked(self: Image) bool {
+
+        return switch (self) {
+
+            .shell, .login, .settings, .monitor => true,
+            else => false,
+
+        };
+
+    }
+
+    /// The permission a process needs before it may be connected to this service.
+    pub fn gate(self: Image) ?Permission {
+
+        return if (self == .net) .network else null;
 
     }
 
@@ -130,6 +150,7 @@ pub const Permission = enum(u32) {
     dma,
     accounts,
     firmware,
+    network,
 
 };
 
@@ -177,6 +198,9 @@ pub const Environment = extern struct {
 
     /// That function's vendor id, and its device id in the upper half; zero without one.
     device: u32 = 0,
+
+    /// The bit its device's interrupts set in the signals `receive` reports; zero when the driver must poll.
+    signal: u64 = 0,
 
 };
 

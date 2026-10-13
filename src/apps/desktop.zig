@@ -1,11 +1,12 @@
 //! The signed-in desktop: wallpaper and its items, top bar, dock, app launcher, menus, notifications, window switcher,
-//! clipboard history, and snips, all surfaces of the login process.
+//! clipboard history, quick settings, and snips, all surfaces of the login process.
 
 const std = @import("std");
 
 const about = @import("about.zig");
 const catalog = @import("catalog.zig");
 const clips = @import("clips.zig");
+const controls = @import("controls.zig");
 const dock = @import("dock.zig");
 const launcher = @import("launcher.zig");
 const notices = @import("notices.zig");
@@ -25,12 +26,13 @@ const theme = gui.theme;
 pub const height = 30;
 const margin = 8;
 
+// Children span the bar's height, so text and icons centre on their capitals rather than on their line boxes.
 const chip = gui.Style{
 
     .padding = .axes(0, 10),
     .direction = .row,
     .gap = 7,
-    .items = .center,
+    .items = .stretch,
 
     .radius = theme.radius,
 
@@ -56,7 +58,7 @@ pub var wallpaper: gui.Window = undefined;
 var bar: gui.Window = undefined;
 
 /// Every surface of the desktop, for the event loop.
-var surfaces: [13]*gui.Window = undefined;
+var surfaces: [14]*gui.Window = undefined;
 
 /// The picture behind everything, shared with the lock screen.
 pub var backdrop: gui.Image = undefined;
@@ -110,6 +112,10 @@ var time = gui.label("", .{
 
 });
 
+/// The date and time, which open the quick settings.
+var clock_parts = [_]*gui.Node{ &time };
+var clock = gui.box(chip, &clock_parts);
+
 var user_icon = gui.icon(.user, theme.icon);
 
 var user_label = gui.label("", .{
@@ -120,7 +126,7 @@ var user_label = gui.label("", .{
 
 var user_parts = [_]*gui.Node{ &user_icon, &user_label };
 var user = gui.box(chip, &user_parts);
-var bar_parts = [_]*gui.Node{ &apps, &title, &time, &user };
+var bar_parts = [_]*gui.Node{ &apps, &title, &clock, &user };
 
 var bar_root = gui.box(.{
 
@@ -172,6 +178,7 @@ var restarted: u64 = 0;
 pub fn init() void {
 
     apps.action = &toggle;
+    clock.action = &settle;
     user.action = &reveal;
 
     const screen = while (true) break gui.screen() catch {
@@ -222,9 +229,10 @@ pub fn init() void {
     notices.init(screen, height);
     switcher.init(screen);
     clips.init(screen);
+    controls.init();
     about.init();
     snip.init();
-    surfaces = .{ &wallpaper, &bar, &dock.window, &launcher.window, &account_menu.window, &desktop_menu.window, &pins.app_menu.window, &shortcuts.menu.window, &notices.window, &switcher.window, &clips.window, &about.window, &snip.window };
+    surfaces = .{ &wallpaper, &bar, &dock.window, &launcher.window, &account_menu.window, &desktop_menu.window, &pins.app_menu.window, &shortcuts.menu.window, &notices.window, &switcher.window, &clips.window, &controls.window, &about.window, &snip.window };
 
     place(screen);
 
@@ -298,6 +306,8 @@ pub fn tick() void {
         claim();
 
     }
+
+    controls.tick();
 
     const now = api.clock();
     if (now / 60 == minute or bar.surface.hidden) return;
@@ -544,6 +554,18 @@ fn toggle(_: *gui.Node) void {
 
 }
 
+/// Opens the quick settings under the date and time, or closes them.
+fn settle(_: *gui.Node) void {
+
+    if (controls.shown()) return dismiss();
+
+    dismiss();
+    clock.selected = true;
+    controls.show(.{ .x = wallpaper.surface.list.width - margin, .y = height + margin });
+    bar.refresh();
+
+}
+
 fn reveal(_: *gui.Node) void {
 
     if (account_menu.shown()) return dismiss();
@@ -569,7 +591,7 @@ pub fn offer(at: gui.Point) void {
 
 }
 
-/// Closes the launcher, the menus, and the clipboard history.
+/// Closes the launcher, the menus, the clipboard history, and the quick settings.
 pub fn dismiss() void {
 
     launcher.hide();
@@ -578,8 +600,10 @@ pub fn dismiss() void {
     pins.app_menu.hide();
     shortcuts.menu.hide();
     clips.hide();
+    controls.hide();
 
     apps.selected = false;
+    clock.selected = false;
     user.selected = false;
     bar.refresh();
 

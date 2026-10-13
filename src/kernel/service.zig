@@ -12,13 +12,27 @@ const Lock = @import("lock.zig").Lock;
 // Guards the supervisor's restart, device probing, and interrupt routing.
 var lock: Lock = .{};
 
-var listeners = [_]u64{0} ** 16;
+var listeners = [_]u64{0} ** machine.lines;
 var supervisor: u64 = 0;
 var restarting = false;
 var attempts: u8 = 0;
 var due: u64 = 0;
 var controller: ?pci.Bar = null;
 var host: ?pci.Bar = null;
+
+/// The Ethernet controller: its PCI function, vendor and device ids, and registers.
+const Nic = struct {
+
+    at: u32,
+    device: u32,
+    registers: pci.Bar,
+
+};
+
+var nic: ?Nic = null;
+
+/// The message-signalled line the Ethernet controller raises.
+const ethernet_line = 16;
 
 /// The display's graphics device: its PCI vendor and device ids, and the BARs it needs.
 const Graphics = struct {
@@ -313,10 +327,36 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64, identity:
             task.context.frame.rcx = host.?.size;
 
         },
-        // Applications keep the default application policy.
-        else => {
+        .net => {
+
+            try task.configure(.service, &.{
+
+                .ipc, .time, .memory, .mmio, .dma, .diagnostics
+
+            });
+
+            const registers = nic.?.registers;
+
+            try task.grant(.mmio, registers.base, registers.size);
+            try task.grant(.log, 0, 1);
+
+            task.environment.device = nic.?.device;
+            task.environment.bars[0] = .{
+
+                .base = registers.base,
+                .size = registers.size,
+
+            };
+
+            task.environment.signal = message(task, nic.?.at, ethernet_line);
 
         },
+        // Applications keep the default application policy, with the network for those granted it.
+        else => if (image.networked()) try task.configure(.application, &.{
+
+            .ipc, .memory, .time, .network
+
+        }),
 
     }
 
@@ -353,6 +393,9 @@ fn probe(image: abi.Image) !void {
     if (image == .usb and host == null) host = if (pci.find(.{ .class = 0x0c0330 })) |at| pci.bar(at, 0) else null;
     if (image == .usb and host == null) return error.NoDevice;
 
+    if (image == .net and nic == null) nic = ethernet();
+    if (image == .net and nic == null) return error.NoDevice;
+
 }
 
 fn listen(task: *process.Process, irq: u4) !void {
@@ -365,12 +408,28 @@ fn listen(task: *process.Process, irq: u4) !void {
 
 }
 
-/// Hands ISA interrupt `irq` to its listener, if that process still runs.
-pub fn interrupt(irq: u4) void {
+/// Routes function `at`'s message-signalled interrupts to `task` as `line`; returns the signal bit, or zero when it has none.
+fn message(task: *process.Process, at: u32, line: u5) u64 {
 
-    const task = root.processes.find(@atomicLoad(u64, &listeners[irq], .acquire)) orelse return;
+    lock.acquire();
+    defer lock.release();
 
-    ipc.signal(task, @as(u64, 1) << irq);
+    const address, const data = machine.message(line, task.home);
+
+    // The listener comes first, so no interrupt goes to the process this one replaces.
+    @atomicStore(u64, &listeners[line], task.id, .release);
+    if (!pci.msi(at, address, data)) return 0;
+
+    return @as(u64, 1) << line;
+
+}
+
+/// Hands interrupt line `line` to its listener, if that process still runs.
+pub fn interrupt(line: u5) void {
+
+    const task = root.processes.find(@atomicLoad(u64, &listeners[line], .acquire)) orelse return;
+
+    ipc.signal(task, @as(u64, 1) << line);
 
 }
 
@@ -389,6 +448,24 @@ fn svga() ?Graphics {
             pci.bar(at, 2) orelse return null,
 
         },
+
+    };
+
+}
+
+/// An Intel Ethernet controller of the e1000e family, such as VMware's 82574L or the I219-V: its registers are BAR 0.
+fn ethernet() ?Nic {
+
+    const at = pci.find(.{ .class = 0x020000 }) orelse return null;
+    const device = pci.id(at);
+
+    if (device & 0xffff != 0x8086) return null;
+
+    return .{
+
+        .at = at,
+        .device = device,
+        .registers = pci.bar(at, 0) orelse return null,
 
     };
 
@@ -434,6 +511,7 @@ pub fn connect(owner: *process.Process, source: u64, destination: u64) !void {
     const receiver = root.processes.find(destination) orelse return error.NoProcess;
 
     if (sender.owner != owner.id or receiver.owner != owner.id) return error.Denied;
+    if (receiver.image) |image| if (image.gate()) |needed| if (!sender.policy.permits(needed)) return error.Denied;
     try sender.allow(.send, destination, 1);
 
 }

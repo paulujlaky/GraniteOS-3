@@ -1,0 +1,3 @@
+roots.pem is Mozilla's CA certificate list, the trust roots of Mozilla NSS, as extracted into Git for Windows'
+ca-bundle.crt (dated 2026-08-20). The list is made available under the Mozilla Public License 2.0:
+https://mozilla.org/MPL/2.0/

@@ -112,15 +112,18 @@ pub fn poll(receiver: *Process) bool {
 
 }
 
-/// Takes the oldest message waiting for the running `receiver`, or else blocks it until one arrives; true when it blocked.
-pub fn receive(receiver: *Process) bool {
+/// Takes the oldest message waiting for the running `receiver`, or else blocks it until one arrives or tick `deadline`, when
+/// not zero; true when it blocked.
+pub fn receive(receiver: *Process, deadline: u64) bool {
 
     receiver.lock.acquire();
     defer receiver.lock.release();
 
     if (take(receiver)) return false;
 
+    receiver.deadline = deadline;
     receiver.state = .receiving;
+    if (deadline != 0) schedule.arm(receiver);
 
     return true;
 
@@ -221,6 +224,10 @@ pub fn expire(id: u32, now: u64) void {
         if (task.state == .sleeping) {
 
             complete(task, 0, 0);
+
+        } else if (task.state == .receiving) {
+
+            complete(task, 6, 0);
 
         } else if (holder != task) {
 

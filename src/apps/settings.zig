@@ -1,4 +1,4 @@
-//! Settings: the display mode, the wallpaper and Quartz, and accounts.
+//! Settings: the display mode, the wallpaper and Quartz, the network, and accounts.
 
 const std = @import("std");
 
@@ -15,6 +15,7 @@ const Section = enum {
 
     display,
     appearance,
+    network,
     accounts,
 
 };
@@ -35,9 +36,16 @@ const sections = [_]struct { title: []const u8, icon: gui.Icon }{
 
     .{ .title = "Display", .icon = .monitor },
     .{ .title = "Appearance", .icon = .palette },
+    .{ .title = "Network", .icon = .globe },
     .{ .title = "Accounts", .icon = .users },
 
 };
+
+/// What the Network page lists about the link, one row each.
+const facts = [_][]const u8{ "Address", "Subnet mask", "Gateway", "DNS server", "Configured", "Hardware address", "Clock" };
+
+/// The manual address's fields, in the order `api.net.Setting` keeps them.
+const entries = [_][]const u8{ "Address", "Subnet mask", "Gateway", "DNS server" };
 
 var window: gui.Window = undefined;
 /// The desktop's config, which keeps the wallpaper.
@@ -147,6 +155,66 @@ var appearance_page = gui.box(.{
 
 }, &appearance_parts);
 
+// Network.
+var network_title = gui.label("Network", theme.title_text);
+var network_note_bytes: [96]u8 = undefined;
+var network_note = gui.label("", theme.caption);
+var fact_keys: [facts.len]gui.Node = undefined;
+var fact_values: [facts.len]gui.Node = undefined;
+var fact_bytes: [facts.len][64]u8 = undefined;
+var fact_parts: [facts.len][2]*gui.Node = undefined;
+var fact_rows: [facts.len]gui.Node = undefined;
+var fact_list: [facts.len]*gui.Node = undefined;
+
+var fact_box = gui.box(.{
+
+    .gap = 6,
+
+}, &fact_list);
+
+var manual_title = gui.label("Manual address", theme.title_text);
+var manual_note = gui.label("Administrators may set the address by hand instead of taking one from DHCP.", theme.caption);
+var entry_bytes: [entries.len][16]u8 = undefined;
+var entry_texts: [entries.len]gui.Text = undefined;
+var entry_fields: [entries.len]gui.Node = undefined;
+var entry_firsts = [_]*gui.Node{ &entry_fields[0], &entry_fields[1] };
+var entry_seconds = [_]*gui.Node{ &entry_fields[2], &entry_fields[3] };
+
+var entry_first = gui.box(.{
+
+    .direction = .row,
+    .gap = theme.gap,
+
+}, &entry_firsts);
+
+var entry_second = gui.box(.{
+
+    .direction = .row,
+    .gap = theme.gap,
+
+}, &entry_seconds);
+
+var use_manual = gui.button("Use manual address", &useManual);
+var use_automatic = gui.button("Use DHCP", &useAutomatic);
+var network_actions = [_]*gui.Node{ &use_manual, &use_automatic };
+
+var network_bar = gui.box(.{
+
+    .direction = .row,
+    .gap = theme.gap,
+
+}, &network_actions);
+
+var network_status = gui.label("", theme.caption);
+var network_parts = [_]*gui.Node{ &network_title, &network_note, &fact_box, &manual_title, &manual_note, &entry_first, &entry_second, &network_bar, &network_status };
+
+var network_page = gui.box(.{
+
+    .gap = theme.spacing,
+    .items = .start,
+
+}, &network_parts);
+
 // Accounts.
 var accounts_title = gui.label("Accounts", theme.title_text);
 var account_names: [8][32]u8 = undefined;
@@ -190,7 +258,7 @@ var accounts_page = gui.box(.{
 
 }, &accounts_parts);
 
-var pages = [_]*gui.Node{ &display_page, &appearance_page, &accounts_page };
+var pages = [_]*gui.Node{ &display_page, &appearance_page, &network_page, &accounts_page };
 
 var content = gui.box(.{
 
@@ -255,6 +323,45 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
 
     }
 
+    for (facts, 0..) |fact, index| {
+
+        fact_keys[index] = gui.label(fact, theme.caption.with(.{
+
+            .width = 140,
+
+        }));
+
+        fact_values[index] = gui.label("", .{});
+        fact_parts[index] = .{ &fact_keys[index], &fact_values[index] };
+
+        fact_rows[index] = gui.box(.{
+
+            .direction = .row,
+
+        }, &fact_parts[index]);
+
+        fact_list[index] = &fact_rows[index];
+
+    }
+
+    for (entries, 0..) |entry, index| {
+
+        entry_texts[index] = .{
+
+            .buffer = &entry_bytes[index],
+            .placeholder = entry,
+
+        };
+
+        entry_fields[index] = gui.input(&entry_texts[index]);
+        entry_fields[index].style = entry_fields[index].style.with(.{
+
+            .width = 180,
+
+        });
+
+    }
+
     for (0..8) |index| {
 
         account_avatars[index] = gui.label("", .{
@@ -310,7 +417,13 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
 
     while (true) {
 
-        const event = window.next(500) orelse continue;
+        // The Network page keeps up with the link while it shows.
+        const event = window.next(500) orelse {
+
+            if (!network_page.hidden) describeNetwork(false);
+            continue;
+
+        };
 
         if (event.kind == .close) window.quit();
 
@@ -332,6 +445,7 @@ fn show(section: Section) void {
     switch (section) {
 
         .display => describeDisplay(""),
+        .network => describeNetwork(true),
         .accounts => loadAccounts(),
         .appearance => {
 
@@ -449,6 +563,105 @@ fn usePicture(_: *gui.Node) void {
 fn note(err: api.ServiceError) void {
 
     appearance_status.content.label = if (err == error.Denied) "Permission denied." else "Could not save the choice.";
+    window.refresh();
+
+}
+
+/// Shows the link and its addresses; `fill` also puts a manual setting in the fields to edit.
+fn describeNetwork(fill: bool) void {
+
+    const state = api.net.status() catch api.net.Status{};
+    const mac = state.mac;
+    const lease_minutes = state.lease / 60 + 1;
+
+    network_note.content.label = if (state.speed == 0) "Not connected." else std.fmt.bufPrint(&network_note_bytes, "{s}, connected at {d} Mb/s.", .{ state.adapter(), state.speed }) catch "";
+
+    const values = [facts.len][]const u8{
+
+        std.fmt.bufPrint(&fact_bytes[0], "{f}", .{state.address}) catch "",
+        std.fmt.bufPrint(&fact_bytes[1], "{f}", .{state.mask}) catch "",
+        std.fmt.bufPrint(&fact_bytes[2], "{f}", .{state.gateway}) catch "",
+        std.fmt.bufPrint(&fact_bytes[3], "{f}", .{state.server}) catch "",
+        switch (state.source) {
+
+            .manual => "Manually",
+            .automatic => std.fmt.bufPrint(&fact_bytes[4], "By DHCP, renewing within {d} min", .{lease_minutes}) catch "",
+            else => "Waiting for DHCP",
+
+        },
+        std.fmt.bufPrint(&fact_bytes[5], "{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}", .{ mac[0], mac[1], mac[2], mac[3], mac[4], mac[5] }) catch "",
+        if (state.utc == 0) "Not yet set over the network" else "Set over the network",
+
+    };
+
+    for (values, 0..) |value, index| fact_values[index].content.label = if (index < 4 and state.address.empty()) "None" else value;
+
+    if (fill and state.source == .manual) {
+
+        for (values[0..entries.len], &entry_texts) |value, *text| text.set(value);
+
+    }
+
+    window.refresh();
+
+}
+
+fn useManual(_: *gui.Node) void {
+
+    var addresses: [entries.len]api.net.Address = undefined;
+
+    for (&addresses, entry_texts, 0..) |*address, text, index| {
+
+        const typed = std.mem.trim(u8, text.text(), " ");
+
+        // The gateway and DNS server may stay empty on a network without them.
+        address.* = if (typed.len == 0 and index >= 2) .{} else api.net.Address.parse(typed) orelse {
+
+            entry_fields[index].invalid = true;
+            return sayNetwork("Enter addresses as four numbers, such as 192.168.1.20.");
+
+        };
+
+        entry_fields[index].invalid = false;
+
+    }
+
+    configure(.{
+
+        .manual = 1,
+        .address = addresses[0],
+        .mask = addresses[1],
+        .gateway = addresses[2],
+        .server = addresses[3],
+
+    }, "Using the manual address.");
+
+}
+
+fn useAutomatic(_: *gui.Node) void {
+
+    configure(.{}, "Asking DHCP for an address.");
+
+}
+
+fn configure(setting: api.net.Setting, done: []const u8) void {
+
+    api.net.configure(setting) catch |err| return sayNetwork(switch (err) {
+
+        error.Denied => "Only administrators can change network settings.",
+        error.Invalid => "The address and subnet mask are needed.",
+        else => "The network service is unavailable.",
+
+    });
+
+    sayNetwork(done);
+    describeNetwork(false);
+
+}
+
+fn sayNetwork(message: []const u8) void {
+
+    network_status.content.label = message;
     window.refresh();
 
 }

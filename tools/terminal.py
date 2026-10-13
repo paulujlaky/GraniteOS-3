@@ -137,10 +137,10 @@ def smoke(command, require):
     require("command not found" in command(b"unknown\r"), "unknown command")
     identity = re.findall(r"\r\n(\d+)\r\n", command(b"id\r"))
     require(bool(identity), "application identity")
-    require("\r\n42\r\n" in command(b"ping\r"), "helper API")
+    require("\r\n42\r\n" in command(b"hello\r"), "helper API")
     require("supervisor will recover" in command(b"crash helper\r"), "service crash")
     time.sleep(0.5)
-    require("\r\n42\r\n" in command(b"ping\r"), "helper recovery")
+    require("\r\n42\r\n" in command(b"hello\r"), "helper recovery")
     require(re.findall(r"\r\n(\d+)\r\n", command(b"id\r")) == identity, "shell survived restart")
     require(re.search(r"serial +\d+", command(b"services\r")), "discovery")
     require(re.search(r"storage +\d+", command(b"services\r")), "storage service")
@@ -173,12 +173,12 @@ def smoke(command, require):
     for _ in range(4):
         command(b"crash helper\r")
         time.sleep(0.5)
-        if "helper unavailable" in command(b"ping\r"):
+        if "helper unavailable" in command(b"hello\r"):
             break
     else:
         raise RuntimeError("Service restart limit was not enforced")
     time.sleep(0.5)
-    require("helper unavailable" in command(b"ping\r"), "exhausted service stays offline")
+    require("helper unavailable" in command(b"hello\r"), "exhausted service stays offline")
     require(re.findall(r"\r\n(\d+)\r\n", command(b"id\r")) == identity, "restart exhaustion isolates failure")
     accounts(command, require)
     print("Interactive terminal and shell passed.")

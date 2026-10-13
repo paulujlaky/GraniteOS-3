@@ -8,6 +8,10 @@ const gpt = @import("gpt.zig");
 const fat = @import("fat.zig");
 const gpu = @import("gpu.zig");
 const hid = @import("hid.zig");
+const wire = @import("wire.zig");
+const tcp = @import("tcp.zig");
+const dns = @import("dns.zig");
+const dhcp = @import("dhcp.zig");
 
 test "GPU quads cover exactly their pixels and sample texel centres under either pixel-centre convention" {
 
@@ -544,5 +548,175 @@ test "HID descriptors find boot keyboards and pointer reports, and keys translat
     try std.testing.expectEqual(63, found.report);
     try std.testing.expectEqual(0x1e, hid.translate(0x04));
     try std.testing.expectEqual(0x148, hid.translate(0x52));
+
+}
+
+/// Turns what a connection wants sent into the segment its peer receives.
+fn carried(from: *tcp.Connection, out: tcp.Outgoing, bytes: []u8) wire.Segment {
+
+    var segment = out.segment;
+
+    segment.payload = bytes[0..from.tx.peek(out.offset, bytes[0..out.length])];
+
+    return segment;
+
+}
+
+test "the Internet checksum matches a known IPv4 header and verifies to zero" {
+
+    var header = [_]u8{ 0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0x00, 0x00, 0xc0, 0xa8, 0x00, 0x01, 0xc0, 0xa8, 0x00, 0xc7 };
+
+    try std.testing.expectEqual(0xb861, wire.fold(wire.sum(0, &header)));
+
+    wire.writeIp(&header, wire.udp, 0xc0a80001, 0xc0a800c7, 0x73 - 20, 0);
+
+    try std.testing.expect(wire.parseIp(&header) == null);
+    try std.testing.expectEqual(0, wire.fold(wire.sum(0, &header)));
+
+}
+
+test "TCP connects, carries data across a lost segment, and closes from both ends" {
+
+    var memory: [4][4096]u8 = undefined;
+    var client = tcp.Connection{ .rx = .{ .bytes = &memory[0] }, .tx = .{ .bytes = &memory[1] } };
+    var server = tcp.Connection{ .rx = .{ .bytes = &memory[2] }, .tx = .{ .bytes = &memory[3] } };
+    var bytes: [1500]u8 = undefined;
+    var now: u64 = 1000;
+
+    client.open(50000, 80, 7, 1460);
+
+    const syn = carried(&client, client.output(now).?, &bytes);
+
+    try std.testing.expect(syn.flags.syn and syn.mss == 1460);
+
+    server.accept(syn, 900, 1460);
+
+    const reply = carried(&server, server.output(now).?, &bytes);
+
+    try std.testing.expect(reply.flags.syn and reply.flags.ack and reply.acknowledgment == 8);
+
+    now += 5;
+    client.input(reply, now);
+    try std.testing.expectEqual(.established, client.state);
+    server.input(carried(&client, client.output(now).?, &bytes), now);
+    try std.testing.expectEqual(.established, server.state);
+
+    // The first segment goes missing, so nothing arrives until the timer resends it.
+    try std.testing.expectEqual(5, client.write("hello"));
+    _ = client.output(now).?;
+    try std.testing.expect(client.output(now) == null);
+    try std.testing.expect(!client.tick(client.due() - 1));
+
+    now = client.due();
+    try std.testing.expect(client.tick(now));
+    server.input(carried(&client, client.output(now).?, &bytes), now);
+
+    var text: [16]u8 = undefined;
+
+    try std.testing.expectEqualStrings("hello", text[0..server.read(&text)]);
+    client.input(carried(&server, server.output(now).?, &bytes), now);
+    try std.testing.expectEqual(0, client.tx.length);
+    try std.testing.expectEqual(0, client.due());
+
+    // A repeat of what already arrived is acknowledged again but not delivered twice.
+    server.input(.{ .source = 50000, .destination = 80, .sequence = 8, .acknowledgment = server.next, .flags = .{ .ack = true }, .window = 4096, .payload = "hello" }, now);
+    try std.testing.expectEqual(0, server.rx.length);
+    try std.testing.expect(server.acknowledge);
+    _ = server.output(now);
+
+    client.close();
+
+    const fin = carried(&client, client.output(now).?, &bytes);
+
+    try std.testing.expect(fin.flags.fin);
+    server.input(fin, now);
+    try std.testing.expectEqual(.close_wait, server.state);
+    try std.testing.expect(server.readable() and server.read(&text) == 0);
+
+    server.close();
+    client.input(carried(&server, server.output(now).?, &bytes), now);
+    try std.testing.expectEqual(.time_wait, client.state);
+    server.input(carried(&client, client.output(now).?, &bytes), now);
+    try std.testing.expectEqual(.closed, server.state);
+    try std.testing.expect(client.tick(client.due()));
+    try std.testing.expectEqual(.closed, client.state);
+
+}
+
+test "TCP gives up an unanswered connection and reports a refused one" {
+
+    var memory: [2][4096]u8 = undefined;
+    var client = tcp.Connection{ .rx = .{ .bytes = &memory[0] }, .tx = .{ .bytes = &memory[1] } };
+    var now: u64 = 0;
+
+    client.open(50001, 81, 100, 1460);
+
+    while (client.state != .closed) {
+
+        if (client.output(now)) |out| try std.testing.expect(out.segment.flags.syn);
+        now = client.due();
+        _ = client.tick(now);
+
+    }
+
+    try std.testing.expect(client.expired and client.reset);
+
+    client.open(50002, 81, 200, 1460);
+    _ = client.output(now);
+    client.input(.{ .source = 81, .destination = 50002, .acknowledgment = 201, .flags = .{ .rst = true, .ack = true } }, now);
+    try std.testing.expect(client.reset and !client.expired and client.state == .closed);
+
+}
+
+test "DNS queries encode names and answers skip aliases to the address" {
+
+    var bytes: [512]u8 = undefined;
+    const length = dns.query(&bytes, 0x1234, "example.com.").?;
+
+    try std.testing.expectEqualSlices(u8, "\x07example\x03com\x00\x00\x01\x00\x01", bytes[12..length]);
+    try std.testing.expect(dns.query(&bytes, 1, "bad..name") == null);
+
+    // The reply: the question, a CNAME pointing back at it, then the A record.
+    const answer = [_]u8{ 0x12, 0x34, 0x81, 0x80, 0, 1, 0, 2, 0, 0, 0, 0 } ++ "\x07example\x03com\x00".* ++ [_]u8{ 0, 1, 0, 1 } ++
+        [_]u8{ 0xc0, 12, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2, 0xc0, 12 } ++
+        [_]u8{ 0xc0, 12, 0, 1, 0, 1, 0, 0, 1, 0, 0, 4, 93, 184, 215, 14 };
+
+    const found = dns.parse(&answer, 0x1234).?;
+
+    try std.testing.expectEqual(0x5db8d70e, found.found.address);
+    try std.testing.expectEqual(256, found.found.ttl);
+    try std.testing.expect(dns.parse(&answer, 0x4321) == null);
+
+    var missing = answer;
+
+    missing[3] = 0x83;
+    try std.testing.expectEqual(.missing, std.meta.activeTag(dns.parse(&missing, 0x1234).?));
+
+}
+
+test "DHCP builds a discover and reads an offer's lease" {
+
+    const mac = wire.Mac{ 0x00, 0x0c, 0x29, 0x01, 0x02, 0x03 };
+    var bytes: [576]u8 = undefined;
+    const length = dhcp.build(&bytes, .discover, 0xabcd, mac, 0, 0, 0);
+
+    try std.testing.expectEqual(300, length);
+    try std.testing.expectEqualSlices(u8, &.{ 53, 1, 1 }, bytes[240..243]);
+
+    // The server's offer: the address, then type, mask, router, DNS, lease, and server options.
+    bytes[0] = 2;
+    wire.put(u32, bytes[16..20], 0xc0a8640a);
+    @memcpy(bytes[240..][0..39], &[_]u8{ 53, 1, 2, 1, 4, 255, 255, 255, 0, 3, 4, 192, 168, 100, 2, 6, 4, 192, 168, 100, 2, 51, 4, 0, 0, 7, 8, 54, 4, 192, 168, 100, 254, 255, 0, 0, 0, 0, 0 });
+
+    const offer = dhcp.parse(bytes[0..length], 0xabcd, mac).?;
+
+    try std.testing.expectEqual(.offer, offer.kind);
+    try std.testing.expectEqual(0xc0a8640a, offer.address);
+    try std.testing.expectEqual(0xffffff00, offer.mask);
+    try std.testing.expectEqual(0xc0a86402, offer.router);
+    try std.testing.expectEqual(0xc0a864fe, offer.server);
+    try std.testing.expectEqual(1800, offer.lease);
+    try std.testing.expectEqual(900, offer.renew);
+    try std.testing.expect(dhcp.parse(bytes[0..length], 0xabce, mac) == null);
 
 }

@@ -54,6 +54,12 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
             // A call that leaves its caller running carries on with it, rather than passing the processor on, unless it yields.
             outcome = calls.handle(task, now);
 
+        } else if (frame.vector == 14 and frame.code & 1 == 0 and task.grow(asm volatile ("mov %%cr2, %[value]" // Read the faulting address.
+            : [value] "=r" (-> usize),
+        ))) {
+
+            outcome = .keep;
+
         } else if (frame.vector < 32) {
 
             root.log.decimal("isolated fault process", task.id);
@@ -74,7 +80,7 @@ pub export fn dispatch(frame: *const arch.context.Frame, floating: *const [512]u
 
     if (frame.vector == 32) core.ticks += 1;
     if (frame.vector == 32 and core.id == root.primary) _ = root.ticks.fetchAdd(1, .release);
-    if (frame.vector >= machine.legacy and frame.vector < machine.legacy + 16) service.interrupt(@intCast(frame.vector - machine.legacy));
+    if (frame.vector >= machine.legacy and frame.vector < machine.legacy + machine.lines) service.interrupt(@intCast(frame.vector - machine.legacy));
     ipc.expire(core.id, root.ticks.load(.acquire));
     if (frame.vector >= 32 and frame.vector != 128 and frame.vector != 255) machine.apic.write(0xb0, 0);
 

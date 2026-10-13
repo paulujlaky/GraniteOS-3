@@ -14,6 +14,8 @@ pub const pages = @import("heap.zig").pages;
 pub const Event = @import("event.zig").Event;
 pub const Key = @import("event.zig").Key;
 pub const time = @import("time.zig");
+pub const net = @import("net.zig");
+pub const http = @import("http.zig");
 pub const Date = time.Date;
 pub const Request = abi.Request;
 pub const ApiError = error{ Denied, Invalid, Missing, Deadlock, Exhausted, Timeout, Busy };
@@ -256,6 +258,13 @@ pub fn out32(port: u64, value: u32) ApiError!void {
 pub fn receive(block: bool) ApiError!Request {
 
     return try checked(raw(.receive, if (block) 0 else 1, 0, 0));
+
+}
+
+/// Receives as `receive(true)` does, but gives up with `error.Timeout` after `limit` ticks, at most a minute.
+pub fn within(limit: u64) ApiError!Request {
+
+    return try checked(raw(.receive, 0, @max(limit, 1), 0));
 
 }
 

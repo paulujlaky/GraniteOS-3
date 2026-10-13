@@ -14,7 +14,7 @@ pub export fn app_main(_: usize, parent: usize, environment: *const api.abi.Envi
 
     forged.permissions = .{
 
-        .ipc, .memory, .time, .ports, .mmio, .power, .diagnostics, .management, .dma, .accounts, .firmware
+        .ipc, .memory, .time, .ports, .mmio, .power, .diagnostics, .management, .dma, .accounts, .firmware, .network
 
     };
 

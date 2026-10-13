@@ -98,6 +98,44 @@ pub fn bar(at: u32, index: u3) ?Bar {
 
 }
 
+/// Has function `at` signal its interrupts by writing `data` to `destination`; false when it cannot.
+pub fn msi(at: u32, destination: u64, data: u16) bool {
+
+    if (read(at, 4) & 0x100000 == 0) return false;
+
+    var offset: u8 = @truncate(read(at, 0x34) & 0xfc);
+
+    // A capability list may loop on broken hardware, so the walk is bounded.
+    for (0..48) |_| {
+
+        if (offset < 0x40) return false;
+
+        const header = read(at, offset);
+
+        if (header & 0xff == 5) {
+
+            const control = header >> 16;
+            const wide = control & 0x80 != 0;
+
+            write(at, offset + 4, @truncate(destination));
+            if (wide) write(at, offset + 8, @truncate(destination >> 32));
+            write(at, offset + if (wide) @as(u8, 12) else 8, data);
+
+            // One message, enabled; multiple-message enable stays zero.
+            write(at, offset, (header & 0xff8fffff) | 0x10000);
+
+            return true;
+
+        }
+
+        offset = @truncate(header >> 8 & 0xfc);
+
+    }
+
+    return false;
+
+}
+
 /// The vendor id of function `at`, with its device id in the upper half.
 pub fn id(at: u32) u32 {
 

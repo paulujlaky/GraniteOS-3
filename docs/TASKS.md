@@ -54,8 +54,8 @@
 
 ## Milestone 6: Workflows
 
-- [ ] Ethernet and VMware networking support.
-- [ ] TCP/IP, automatic configuration, DNS, and HTTP/HTTPS transfers.
+- [x] Ethernet and VMware networking support (e1000e; the desktop's I219-V awaits physical validation).
+- [x] TCP/IP, automatic configuration, DNS, and HTTP/HTTPS transfers.
 - [ ] Audio output on supported physical and virtual hardware.
 - [ ] Document and code editing.
 - [ ] Audio/video playback.

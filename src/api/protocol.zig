@@ -6,6 +6,9 @@ pub const exists = invalid - 3;
 pub const full = invalid - 4;
 pub const busy = invalid - 5;
 pub const denied = invalid - 6;
+pub const timeout = invalid - 7;
+pub const refused = invalid - 8;
+pub const offline = invalid - 9;
 
 pub const Operation = enum(u8) {
 
@@ -57,6 +60,14 @@ pub const Operation = enum(u8) {
     snip,
     pin,
     quartz,
+    connect,
+    listen,
+    accept,
+    close,
+    resolve,
+    echo,
+    roots,
+    enable,
     _,
 
 };
