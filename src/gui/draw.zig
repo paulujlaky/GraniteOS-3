@@ -22,6 +22,7 @@ const Kind = enum(u32) {
     shadow,
     form,
     curve,
+    quartz,
     _,
 
 };
@@ -103,14 +104,7 @@ const Trace = extern struct {
 
 pub const Command = union(enum) {
 
-    shape: struct {
-
-        clip: Rect,
-        area: Rect,
-        color: u32,
-        radius: i32,
-
-    },
+    shape: Fill,
 
     text: struct {
 
@@ -159,6 +153,19 @@ pub const Command = union(enum) {
         under: ?sketch.Under,
 
     },
+
+    /// Quartz under `color`; see `List.quartz`.
+    quartz: Fill,
+
+};
+
+/// A rectangle with rounded corners, filled with a colour or with Quartz under it.
+pub const Fill = struct {
+
+    clip: Rect,
+    area: Rect,
+    color: u32,
+    radius: i32,
 
 };
 
@@ -209,11 +216,25 @@ pub const List = struct {
     /// Fills `area` with anti-aliased corners of `radius` pixels.
     pub fn round(self: *List, area: Rect, radius: i32, color: u32) void {
 
+        self.rounded(.shape, area, radius, color);
+
+    }
+
+    /// Fills `area`, corners rounded to `radius`, with Quartz: whatever lies behind it, on surfaces beneath or drawn before it, softened
+    /// under `tint`; see `quartz.zig`.
+    pub fn quartz(self: *List, area: Rect, radius: i32, tint: u32) void {
+
+        self.rounded(.quartz, area, radius, tint);
+
+    }
+
+    fn rounded(self: *List, kind: Kind, area: Rect, radius: i32, color: u32) void {
+
         const clip = self.visible(area) orelse return;
 
         self.append(std.mem.asBytes(&Shape{
 
-            .header = header(.shape, @sizeOf(Shape), clip),
+            .header = header(kind, @sizeOf(Shape), clip),
 
             .area = wire(area),
 
@@ -298,7 +319,7 @@ pub const List = struct {
     /// Draws `string`, after `which` if any, on a small dark tag, such as a hint or what a drag carries; `tagged` says where.
     pub fn tag(self: *List, which: ?font.Icon, string: []const u8, area: Rect) void {
 
-        self.round(area, theme.radius, theme.glass);
+        self.quartz(area, theme.radius, theme.quartz);
 
         var words = area.inset(tag_padding);
 
@@ -460,25 +481,23 @@ pub const Iterator = struct {
 
             switch (top.kind) {
 
-                .shape => {
+                .shape, .quartz => {
 
                     if (body.len < @sizeOf(Shape)) continue;
 
                     const shape = std.mem.bytesToValue(Shape, body[0..@sizeOf(Shape)]);
 
-                    return .{
+                    const fill = Fill{
 
-                        .shape = .{
+                        .clip = clip,
+                        .area = rect(shape.area) orelse continue,
 
-                            .clip = clip,
-                            .area = rect(shape.area) orelse continue,
-
-                            .color = shape.color,
-                            .radius = std.math.clamp(shape.radius, 0, reach),
-
-                        },
+                        .color = shape.color,
+                        .radius = std.math.clamp(shape.radius, 0, reach),
 
                     };
+
+                    return if (top.kind == .shape) .{ .shape = fill } else .{ .quartz = fill };
 
                 },
                 .text => {
@@ -685,6 +704,12 @@ pub fn replay(target: *canvas.Canvas, bytes: []const u8, origin: Point, limit: R
                     .shift = shift,
 
                 });
+
+            },
+            .quartz => |pane| {
+
+                target.limit = limit.intersect(move(pane.clip, origin)) orelse continue;
+                target.quartz(move(pane.area, origin), pane.radius, pane.color);
 
             },
 

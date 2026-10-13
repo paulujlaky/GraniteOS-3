@@ -77,7 +77,7 @@ var status = gui.box(.{
     .direction = .row,
     .items = .center,
 
-    .background = theme.raised,
+    .background = theme.pane,
 
 }, &status_parts);
 

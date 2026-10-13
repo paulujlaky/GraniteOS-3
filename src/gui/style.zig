@@ -115,6 +115,10 @@ pub const Style = struct {
     scroll: bool = false,
 
     background: ?u32 = null,
+
+    /// Draws the background as a tint over Quartz, showing what lies behind the node softened.
+    quartz: bool = false,
+
     color: u32 = theme.text,
     border: ?u32 = null,
     border_width: i32 = 0,

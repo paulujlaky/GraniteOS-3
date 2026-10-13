@@ -40,6 +40,14 @@ pub const Category = enum {
 
 };
 
+/// What Settings changed in the `desktop` config, so the desktop reads only that again; sent with `reload`.
+pub const Reload = enum(u8) {
+
+    all,
+    quartz,
+
+};
+
 pub const App = struct {
 
     image: Image,

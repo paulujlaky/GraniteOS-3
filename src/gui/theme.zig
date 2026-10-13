@@ -23,8 +23,13 @@ pub const faint = 0x5a5a5a;
 pub const accent = 0xeeeeee;
 pub const danger = 0xe5534b;
 
-/// Dark translucent chrome over the desktop, such as the bar, dock, and tags; the top byte is transparency, as `canvas.shade` makes it.
-pub const glass = 0x17101010;
+/// Graphite tints three quarters opaque over Quartz, which softens what lies behind bars, docks, menus, windows, and tags; the top byte
+/// is transparency, as `canvas.shade` makes it. With Quartz switched off they draw solid, as `background` and `raised`.
+pub const quartz = 0x40141414;
+pub const quartz_raised = 0x401b1b1b;
+
+/// A light tint marking out panes over Quartz, such as toolbars, sidebars, and title bars; over `background` it makes `raised`.
+pub const pane = 0xf7ffffff;
 
 /// An area swept out with the pointer, as when selecting: a faint white fill inside a lighter, softly rounded edge.
 pub const sweep_fill = 0xe6ffffff;
@@ -54,7 +59,7 @@ pub const panel = Style{
     .padding = .all(spacing),
     .gap = spacing,
 
-    .background = raised,
+    .background = pane,
     .radius = corner,
 
 };
@@ -148,13 +153,14 @@ pub const destructive = button.with(.{
 
 });
 
-/// The raised, bordered card of a pop-up list or launcher.
+/// The raised, bordered Quartz card of a pop-up list or launcher.
 pub const popup = Style{
 
     .padding = .all(6),
     .gap = 2,
 
-    .background = raised,
+    .background = quartz_raised,
+    .quartz = true,
     .border = line,
     .border_width = border,
     .radius = corner,
@@ -275,7 +281,7 @@ pub const bar = Style{
     .gap = gap / 2,
     .items = .center,
 
-    .background = raised,
+    .background = pane,
 
 };
 

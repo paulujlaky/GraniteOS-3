@@ -168,6 +168,11 @@ const Surface = struct {
     /// What the pointer shows over its content, as its client last said.
     cursor: gui.Cursor = .arrow,
 
+    /// The part of its content its commands draw with Quartz, and whether the first of them paints all of it opaque, as an app with a
+    /// background of its own does; see `survey`.
+    frosted: gui.Rect = .{},
+    covered: bool = false,
+
     fn decorated(self: *const Surface) bool {
 
         return self.layer == .window;
@@ -234,13 +239,15 @@ const Surface = struct {
 
     }
 
-    /// Two rectangles crossing in a plus that the frame covers wholly, its rounded corners left out; nothing beneath them shows.
+    /// Two rectangles crossing in a plus that the window covers wholly, its rounded corners left out; nothing beneath them shows.
+    /// Through Quartz it does, so then only content its app paints opaque counts.
     fn solid(self: *const Surface) [2]gui.Rect {
 
         if (!self.decorated() or !self.visible() or self.transition != null) return .{ .{}, .{} };
+        if (translucent and !self.covered) return .{ .{}, .{} };
 
-        const outer = self.frame();
-        const radius = self.rounding();
+        const outer = if (translucent) self.area else self.frame();
+        const radius = if (translucent) self.curve() else self.rounding();
 
         return .{ .{
 
@@ -257,6 +264,28 @@ const Surface = struct {
             .height = outer.height,
 
         } };
+
+    }
+
+    /// Where it draws Quartz on the screen, reading what lies behind as far as `gui.quartz.reach` beyond; empty when it draws none.
+    /// A window's frame is Quartz, though content its app paints opaque hides all but the title bar.
+    fn pane(self: *const Surface) gui.Rect {
+
+        if (!translucent or !self.drawn() or !(self.decorated() or self.frosted.width > 0)) return .{};
+        if (self.transition != null) return self.painted;
+
+        const outer = self.frame();
+
+        const decorations = if (!self.decorated()) gui.Rect{} else if (!self.covered) outer else gui.Rect{
+
+            .x = outer.x,
+            .y = outer.y,
+            .width = outer.width,
+            .height = theme.title,
+
+        };
+
+        return decorations.join(gui.draw.move(self.frosted, corner(self.area)));
 
     }
 
@@ -410,6 +439,13 @@ var backing: ?api.Shared = null;
 var saved = api.Config{};
 
 var renderer: ?gpu.Gpu = null;
+
+/// Quartz shows what lies behind it, unless the session's user switched it off, when it draws solid.
+var translucent = true;
+
+/// Where the CPU softens Quartz, and keeps what lies around an area it redraws; see `ring`.
+var scratch: ?api.Shared = null;
+var around: ?api.Shared = null;
 
 /// Intel graphics found behind the boot framebuffer, read but not yet driven.
 var graphics: ?intel.Intel = null;
@@ -611,6 +647,7 @@ fn open(size: gui.Rect) bool {
 
     if (renderer) |*old| old.release();
     renderer = gpu.Gpu.init(&screen.svga, width, height);
+    frost();
 
     // A new device forgot every texture, so images go back up.
     if (renderer) |*drawer| {
@@ -659,14 +696,21 @@ fn framebuffer(base: usize, geometry: usize, shifts: usize) void {
 
 }
 
-/// Makes `memory` the CPU's copy of a `size` screen, freeing the last one.
+/// Makes `memory` the CPU's copy of a `size` screen, freeing the last one, with room to soften Quartz in.
 fn adopt(memory: api.Shared, size: gui.Rect) void {
 
-    if (backing) |old| api.detach(old.handle);
+    for ([_]*?api.Shared{ &backing, &scratch, &around }) |held| if (held.*) |old| {
+
+        api.detach(old.handle);
+        held.* = null;
+
+    };
 
     const count: usize = @intCast(size.width * size.height);
+    const needed = gui.quartz.room(@intCast(size.width), @intCast(size.height));
 
     backing = memory;
+    scratch = api.share((needed * 4 + 4095) / 4096) catch null;
 
     back = .{
 
@@ -675,6 +719,19 @@ fn adopt(memory: api.Shared, size: gui.Rect) void {
         .height = @intCast(size.height),
 
     };
+
+    frost();
+
+}
+
+/// Tells the GPU whether Quartz shows what lies behind it, and lets the CPU soften it while it does.
+fn frost() void {
+
+    if (renderer) |*device| device.translucent = translucent;
+
+    const spare = scratch orelse return;
+
+    back.spare = if (translucent) std.mem.bytesAsSlice(u32, spare.bytes[0 .. gui.quartz.room(back.width, back.height) * 4]) else &.{};
 
 }
 
@@ -805,6 +862,7 @@ fn respond(request: api.Request) ?u64 {
         .clipboard => paste(request, value),
         .capture => snapshot(request),
         .cursor => pointing(request, value),
+        .quartz => quartz(request, value),
         .crash => if (request.first == api.raw(.owner, 0, 0, 0).first) fault() else protocol.invalid,
         else => protocol.invalid,
 
@@ -929,6 +987,9 @@ fn present(request: api.Request, value: u64) u64 {
     surface.half = @intCast(value >> 8 & 1);
     surface.size = length;
 
+    // Content turning opaque, or no longer, changes how much of its frame's Quartz shows.
+    if (survey(surface) and surface.shown) compose(surface.footprint());
+
     // A surface's first frame plays it in, and a window's ends the busy pointer of the launch that opened it.
     if (!surface.shown) {
 
@@ -950,6 +1011,45 @@ fn present(request: api.Request, value: u64) u64 {
     } else surface.area);
 
     return 0;
+
+}
+
+/// Notes where `surface`'s commands draw Quartz, and whether the first of them paints its content opaque; true when the latter changed.
+fn survey(surface: *Surface) bool {
+
+    const was = surface.covered;
+    var commands = gui.draw.iterate(surface.commands());
+    var first = true;
+
+    const whole = gui.Rect{
+
+        .width = surface.area.width,
+        .height = surface.area.height,
+
+    };
+
+    surface.frosted = .{};
+    surface.covered = false;
+
+    while (commands.next()) |command| : (first = false) {
+
+        switch (command) {
+
+            .shape => |fill| if (first) {
+
+                surface.covered = fill.color >> 24 == 0 and fill.radius == 0 and (fill.area.intersect(fill.clip) orelse continue).encloses(whole);
+
+            },
+            .quartz => |frosted| surface.frosted = surface.frosted.join(frosted.area.intersect(frosted.clip) orelse continue),
+            else => {
+
+            },
+
+        }
+
+    }
+
+    return surface.covered != was;
 
 }
 
@@ -1065,6 +1165,21 @@ fn activate(request: api.Request, value: u64) u64 {
     }
 
     changed = true;
+
+    return 0;
+
+}
+
+/// Session only: shows what lies behind Quartz (`value` 1), or draws it solid (0), as its user chose.
+fn quartz(request: api.Request, value: u64) u64 {
+
+    if (request.first != session()) return protocol.denied;
+    if (value > 1) return protocol.invalid;
+    if (translucent == (value == 1)) return 0;
+
+    translucent = value == 1;
+    frost();
+    compose(back.bounds());
 
     return 0;
 
@@ -1327,14 +1442,16 @@ fn floor(visible: gui.Rect) usize {
 
 }
 
-/// Redraws `visible` from the surface stack, bottom to top, on the GPU when there is one.
+/// Redraws `visible` from the surface stack, bottom to top, on the GPU when there is one; Quartz near it redraws with it.
 fn render(visible: gui.Rect) void {
+
+    const extent = widen(visible);
 
     if (renderer) |*device| {
 
-        device.begin(visible);
+        device.begin(extent.read);
 
-        for (stack[floor(visible)..depth]) |index| {
+        for (stack[floor(extent.read)..depth]) |index| {
 
             const surface = &surfaces[index];
             if (!surface.drawn()) continue;
@@ -1342,15 +1459,15 @@ fn render(visible: gui.Rect) void {
             if (aiming(index)) {
 
                 drawing = 0;
-                device.render(guide().commands(), .{}, visible, texture);
+                device.render(guide().commands(), .{}, extent.read, texture);
 
             }
 
             if (surface.transition != null) {
 
-                float(device, index, visible);
+                float(device, index, extent.read);
 
-            } else if (surface.footprint().intersect(visible)) |limit| {
+            } else if (surface.footprint().intersect(extent.read)) |limit| {
 
                 layers(device, index, limit, false);
 
@@ -1358,7 +1475,7 @@ fn render(visible: gui.Rect) void {
 
         }
 
-        return device.finish(visible);
+        return device.finish(extent.shown);
 
     }
 
@@ -1371,14 +1488,121 @@ fn render(visible: gui.Rect) void {
 
     }
 
-    paint(visible);
+    // Quartz softens what lies past the area it shows, and draws wrongly out there, so what lay there before goes back.
+    const held = !std.meta.eql(extent.read, extent.shown) and ring(extent.read, extent.shown, false);
+
+    paint(if (held) extent.read else extent.shown);
+    if (held) _ = ring(extent.read, extent.shown, true);
 
     switch (screen) {
 
-        .svga => |*device| device.present(visible),
-        .frame => |*frame| frame.present(&back, visible),
+        .svga => |*device| device.present(extent.shown),
+        .frame => |*frame| frame.present(&back, extent.shown),
 
     }
+
+}
+
+/// What redrawing `visible` takes: the Quartz near it changes with it, so is `shown` too, and reads what lies behind it further out,
+/// which is `read` and drawn beneath it.
+fn widen(visible: gui.Rect) struct { shown: gui.Rect, read: gui.Rect } {
+
+    const reach = gui.quartz.reach;
+    const bottom = floor(visible);
+    var shown = visible;
+    var position = depth;
+
+    // Nothing below the window hiding all of `visible` shows; above it, Quartz over Quartz takes in what changed beneath it in turn.
+    for (stack[bottom..depth]) |index| {
+
+        if (shown.inset(-reach).intersect(surfaces[index].pane())) |near| shown = shown.join(near);
+
+    }
+
+    // A mode switch may leave an area of the old screen marked.
+    shown = shown.intersect(visible.inset(-2 * reach)).?.intersect(back.bounds()) orelse return .{
+
+        .shown = visible,
+        .read = visible,
+
+    };
+
+    var read = shown;
+
+    while (position > bottom) {
+
+        position -= 1;
+        if (read.intersect(surfaces[stack[position]].pane())) |beneath| read = read.join(beneath.inset(-reach));
+
+    }
+
+    return .{
+
+        .shown = shown,
+        .read = read.intersect(shown.inset(-2 * reach)).?.intersect(back.bounds()).?,
+
+    };
+
+}
+
+/// Copies what lies in `outer` around `inner` into `around`, or back out of it with `restore`; false without room for it.
+fn ring(outer: gui.Rect, inner: gui.Rect, restore: bool) bool {
+
+    // `widen` reads at most twice Quartz's reach past what it shows, so no band is deeper than that along the screen's edges.
+    if (around == null) around = api.share((4 * gui.quartz.reach * (back.width + back.height) * 4 + 4095) / 4096) catch return false;
+
+    const store = std.mem.bytesAsSlice(u32, around.?.bytes);
+    var offset: usize = 0;
+
+    const bands = [_]gui.Rect{ .{
+
+        .x = outer.x,
+        .y = outer.y,
+        .width = outer.width,
+        .height = inner.y - outer.y,
+
+    }, .{
+
+        .x = outer.x,
+        .y = inner.bottom(),
+        .width = outer.width,
+        .height = outer.bottom() - inner.bottom(),
+
+    }, .{
+
+        .x = outer.x,
+        .y = inner.y,
+        .width = inner.x - outer.x,
+        .height = inner.height,
+
+    }, .{
+
+        .x = inner.right(),
+        .y = inner.y,
+        .width = outer.right() - inner.right(),
+        .height = inner.height,
+
+    } };
+
+    for (bands) |band| {
+
+        if (band.width <= 0 or band.height <= 0) continue;
+
+        const width: usize = @intCast(band.width);
+
+        for (@intCast(band.y)..@intCast(band.bottom())) |y| {
+
+            const row = back.pixels[y * back.width + @as(usize, @intCast(band.x)) ..][0..width];
+            const copy = store[offset..][0..width];
+
+            if (restore) @memcpy(row, copy) else @memcpy(copy, row);
+            offset += width;
+
+        }
+
+    }
+
+    return true;
 
 }
 
@@ -2588,19 +2812,29 @@ fn trim(index: usize) gui.draw.List {
     // The title bar and its controls are the frame's rounded inside, cut to their own rectangles.
     const within = frame.inset(border);
 
-    list.round(frame, radius, if (active) theme.selected else theme.line);
+    // The frame is Quartz, which content its app paints opaque hides but for the title bar; there, a window growing faster than its app
+    // redraws shows a plain background rather than what lay behind.
+    list.limit = if (surface.covered) bar else null;
+    list.quartz(frame, radius, theme.quartz);
 
-    // Content draws over its own background, so a window growing faster than its app redraws shows that rather than what lay behind.
-    list.limit = gui.draw.move(surface.area, .{
+    if (surface.covered) {
 
-        .x = -footprint.x,
-        .y = -footprint.y,
+        list.limit = gui.draw.move(surface.area, .{
 
-    });
+            .x = -footprint.x,
+            .y = -footprint.y,
 
-    list.round(within, curve, theme.background);
+        });
+
+        list.round(within, curve, theme.background);
+
+    }
+
     list.limit = bar.inset(border);
-    list.round(within, curve, theme.raised);
+    list.round(within, curve, theme.pane);
+    list.limit = null;
+    list.outline(frame, @floatFromInt(radius), border, if (active) theme.selected else theme.line);
+    list.limit = bar.inset(border);
 
     // Controls sit right to left: close, then maximise unless fixed, then minimise.
     var right = bar.right() - border;

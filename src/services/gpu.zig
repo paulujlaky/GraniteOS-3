@@ -29,6 +29,7 @@ const set_table = 1115;
 const define_target = 1124;
 const bind_target = 1126;
 const update_target = 1127;
+const set_constants = 1130;
 const define_object = 1135;
 
 // Surface formats and flags.
@@ -121,6 +122,170 @@ const tint = [_]u32{
 
 };
 
+/// The pixel shaders that soften what lies under Quartz, on its grid as `gui.quartz` lays out, assembled from Direct3D 9 tokens:
+/// an instruction's opcode and how many tokens follow it, then each register's type and number with its write mask or swizzle.
+const shaders = struct {
+
+    /// Averages the four pixel pairs around a grid texel's middle, each one smooth sample a pixel away diagonally: c0 and c1 hold the
+    /// two diagonals.
+    const gather = prologue ++
+        op(.def, .{ uniform(8, mask_all), bits(0.25), bits(0), bits(0), bits(0) }) ++
+        op(.add, .{ temp(1, mask_xy), coordinates, uniform(0, same) }) ++
+        op(.add, .{ temp(2, mask_xy), coordinates, negated(uniform(0, same)) }) ++
+        op(.add, .{ temp(3, mask_xy), coordinates, uniform(1, same) }) ++
+        op(.add, .{ temp(4, mask_xy), coordinates, negated(uniform(1, same)) }) ++
+        op(.texld, .{ temp(5, mask_all), temp(1, same), sampler }) ++
+        op(.texld, .{ temp(6, mask_all), temp(2, same), sampler }) ++
+        op(.texld, .{ temp(7, mask_all), temp(3, same), sampler }) ++
+        op(.texld, .{ temp(8, mask_all), temp(4, same), sampler }) ++
+        op(.add, .{ temp(0, mask_all), temp(5, same), temp(6, same) }) ++
+        op(.add, .{ temp(0, mask_all), temp(0, same), temp(7, same) }) ++
+        op(.add, .{ temp(0, mask_all), temp(0, same), temp(8, same) }) ++
+        op(.mul, .{ temp(0, mask_all), temp(0, same), uniform(8, xxxx) }) ++
+        op(.mov, .{ output, temp(0, same) }) ++
+        epilogue;
+
+    /// Blurs along one axis, from the middle tap and three pairs of taps either side: c0 to c2 hold how far out each pair samples,
+    /// and c3 the weights.
+    const blur = prologue ++
+        op(.texld, .{ temp(0, mask_all), coordinates, sampler }) ++
+        op(.mul, .{ temp(0, mask_all), temp(0, same), uniform(3, xxxx) }) ++
+        either(0, yyyy) ++
+        either(1, zzzz) ++
+        either(2, wwww) ++
+        op(.mov, .{ output, temp(0, same) }) ++
+        epilogue;
+
+    /// Lays the softened grid on the screen under a tint, its corners rounded as `Canvas.round` rounds them: c0 holds the area's
+    /// middle and how far its straight edges run from it, c1 the corners' radius plus a half and how many screen pixels the grid
+    /// texture spans, c2 the premultiplied tint, and c3 how much of what lies behind shows through it.
+    const frost = prologue ++
+        op(.def, .{ uniform(8, mask_all), bits(0), bits(0.0001), bits(0), bits(0) }) ++
+        op(.texld, .{ temp(0, mask_all), coordinates, sampler }) ++
+        op(.mul, .{ temp(0, mask_all), temp(0, same), uniform(3, xxxx) }) ++
+        op(.add, .{ temp(0, mask_all), temp(0, same), uniform(2, same) }) ++
+        op(.mul, .{ temp(1, mask_xy), coordinates, uniform(1, zwzw) }) ++
+        op(.add, .{ temp(1, mask_xy), temp(1, same), negated(uniform(0, same)) }) ++
+        op(.max, .{ temp(1, mask_xy), temp(1, same), negated(temp(1, same)) }) ++
+        op(.add, .{ temp(1, mask_xy), temp(1, same), negated(uniform(0, zwzw)) }) ++
+        op(.max, .{ temp(1, mask_xy), temp(1, same), uniform(8, xxxx) }) ++
+        op(.mul, .{ temp(1, mask_xy), temp(1, same), temp(1, same) }) ++
+        op(.add, .{ temp(1, mask_x), temp(1, same), temp(1, yyyy) }) ++
+        op(.add, .{ temp(1, mask_x), temp(1, same), uniform(8, yyyy) }) ++
+        op(.rsq, .{ temp(1, mask_x), temp(1, xxxx) }) ++
+        op(.rcp, .{ temp(1, mask_x), temp(1, xxxx) }) ++
+        op(.add, .{ temp(1, mask_x | saturate), uniform(1, xxxx), negated(temp(1, xxxx)) }) ++
+        op(.mul, .{ temp(0, mask_all), temp(0, same), temp(1, xxxx) }) ++
+        op(.mov, .{ output, temp(0, same) }) ++
+        epilogue;
+
+    /// Adds the taps uniform `pair` reaches either side, weighted by component `weight` of c3.
+    fn either(comptime pair: u32, comptime weight: u32) [25]u32 {
+
+        return op(.add, .{ temp(1, mask_xy), coordinates, uniform(pair, same) }) ++
+            op(.add, .{ temp(2, mask_xy), coordinates, negated(uniform(pair, same)) }) ++
+            op(.texld, .{ temp(3, mask_all), temp(1, same), sampler }) ++
+            op(.texld, .{ temp(4, mask_all), temp(2, same), sampler }) ++
+            op(.add, .{ temp(3, mask_all), temp(3, same), temp(4, same) }) ++
+            op(.mad, .{ temp(0, mask_all), temp(3, same), uniform(3, weight), temp(0, same) });
+
+    }
+
+    const Opcode = enum(u32) {
+
+        mov = 1,
+        add = 2,
+        mad = 4,
+        mul = 5,
+        rcp = 6,
+        rsq = 7,
+        max = 11,
+        dcl = 31,
+        texld = 66,
+        def = 81,
+
+    };
+
+    // ps_2_0 with dcl t0.xy and dcl_2d s0, as in `tint`, and the end token.
+    const prologue = [_]u32{0xffff0200} ++ op(.dcl, .{ 0x80000000, register(3, 0, mask_xy) }) ++ op(.dcl, .{ 0x90000000, register(10, 0, mask_all) });
+    const epilogue = [_]u32{0x0000ffff};
+
+    const coordinates = register(3, 0, same);
+    const sampler = register(10, 0, same);
+    const output = register(8, 0, mask_all);
+
+    // Write masks, saturating, and swizzles reading each component in place, one component in all four, or z and w as x and y.
+    const mask_x = 0x1;
+    const mask_xy = 0x3;
+    const mask_all = 0xf;
+    const saturate = 0x10;
+    const same = 0xe4;
+    const xxxx = 0x00;
+    const yyyy = 0x55;
+    const zzzz = 0xaa;
+    const wwww = 0xff;
+    const zwzw = 0xee;
+
+    fn op(comptime opcode: Opcode, comptime operands: anytype) [operands.len + 1]u32 {
+
+        return [_]u32{@intFromEnum(opcode) | operands.len << 24} ++ @as([operands.len]u32, operands);
+
+    }
+
+    /// A register of type `kind` (temporary 0, constant 2, texture coordinate 3, colour output 8, sampler 10), with `select` as its
+    /// write mask or swizzle.
+    fn register(comptime kind: u32, comptime number: u32, comptime select: u32) u32 {
+
+        return 1 << 31 | (kind & 7) << 28 | (kind >> 3) << 11 | select << 16 | number;
+
+    }
+
+    fn temp(comptime number: u32, comptime select: u32) u32 {
+
+        return register(0, number, select);
+
+    }
+
+    fn uniform(comptime number: u32, comptime select: u32) u32 {
+
+        return register(2, number, select);
+
+    }
+
+    fn negated(comptime token: u32) u32 {
+
+        return token | 1 << 24;
+
+    }
+
+    fn bits(comptime value: f32) u32 {
+
+        return @bitCast(value);
+
+    }
+
+};
+
+/// The shaders by id, one vertex shader and then the pixel shaders, each in its own slot of the code object.
+const Program = enum(u32) {
+
+    passthrough,
+    tint,
+    gather,
+    blur,
+    frost,
+
+};
+
+const programs = [_][]const u32{ &passthrough, &tint, &shaders.gather, &shaders.blur, &shaders.frost };
+const program_room = 512;
+
+comptime {
+
+    for (programs) |words| std.debug.assert(words.len * 4 <= program_room);
+
+}
+
 // Object ids; every surface keeps its pixels in the memory object of the same id.
 const frame = 0;
 const vertices = 1;
@@ -135,8 +300,12 @@ const canvas = 6;
 /// Where a moving surface is drawn whole, with transparency, before landing on `canvas` scaled and faded.
 const layer = 7;
 
+/// Where what lies under Quartz softens, on its grid: gathered into `haze`, blurred across into `smear`, then down back into `haze`.
+const haze = 8;
+const smear = 9;
+
 /// Clients' images, each a texture of its own, follow the fixed objects.
-const pictures = 8;
+const pictures = 10;
 pub const textures = 48;
 const objects = pictures + textures;
 
@@ -237,13 +406,21 @@ pub const Gpu = struct {
     /// How far pixel centres sit from each pixel's top-left corner; the self-test settles it.
     shift: f32 = 0.5,
 
-    /// The target quads land on, in pixels.
+    /// The target quads land on, in pixels, and the canvas or layer drawing goes back to after softening Quartz.
     columns: u32 = 0,
     rows: u32 = 0,
+    target: u32 = canvas,
 
-    /// Triangles staged since the last draw, and whether the device may still be reading staged ones.
+    /// How quads blend, as `blending` last set it.
+    mode: Blend = .over,
+
+    /// Triangles staged since the last draw, after those drawn since the device last caught up, which it may still be reading.
     count: usize = 0,
-    busy: bool = false,
+    drawn: usize = 0,
+
+    /// Whether Quartz shows what lies behind it, rather than its tint solid, and the grid it softens on.
+    translucent: bool = true,
+    grid: [2]u32 = .{ 0, 0 },
 
     filled: usize = 0,
 
@@ -283,6 +460,8 @@ pub const Gpu = struct {
 
         }
 
+        const grid = gui.quartz.grid(width, height);
+
         var gpu = Gpu{
 
             .device = device,
@@ -293,6 +472,8 @@ pub const Gpu = struct {
             .atlas = try api.share(atlas_size * atlas_size * 4 / 4096),
             .readback = undefined,
 
+            .grid = .{ @intCast(grid[0]), @intCast(grid[1]) },
+
         };
 
         // The device may write context state and rendered frames back at any time, so those pages outlive us.
@@ -300,6 +481,8 @@ pub const Gpu = struct {
         _ = try gpu.reserve(frame, (width * height * 4 + 4095) / 4096);
         _ = try gpu.reserve(canvas, (width * height * 4 + 4095) / 4096);
         _ = try gpu.reserve(layer, (width * height * 4 + 4095) / 4096);
+        _ = try gpu.reserve(haze, (gpu.grid[0] * gpu.grid[1] * 4 + 4095) / 4096);
+        _ = try gpu.reserve(smear, (gpu.grid[0] * gpu.grid[1] * 4 + 4095) / 4096);
         gpu.readback = try gpu.reserve(result, 1);
 
         const program = try gpu.reserve(code, 1);
@@ -307,22 +490,28 @@ pub const Gpu = struct {
         try gpu.lend(vertices, gpu.vertices);
         try gpu.lend(atlas, gpu.atlas);
 
-        @memcpy(program.bytes[0..@sizeOf(@TypeOf(passthrough))], std.mem.asBytes(&passthrough));
-        @memcpy(program.bytes[256..][0..@sizeOf(@TypeOf(tint))], std.mem.asBytes(&tint));
-
         gpu.surface(frame, texture_hint | target_hint | scanout, x8r8g8b8, width, height);
         gpu.surface(canvas, texture_hint | target_hint, x8r8g8b8, width, height);
         gpu.surface(layer, texture_hint | target_hint, a8r8g8b8, width, height);
+        gpu.surface(haze, texture_hint | target_hint, x8r8g8b8, gpu.grid[0], gpu.grid[1]);
+        gpu.surface(smear, texture_hint | target_hint, x8r8g8b8, gpu.grid[0], gpu.grid[1]);
         gpu.surface(vertices, vertex_hint, buffer, vertex_pages * 4096, 1);
         gpu.surface(atlas, texture_hint, a8r8g8b8, atlas_size, atlas_size);
         gpu.surface(result, target_hint, x8r8g8b8, 4, 4);
 
         device.submit(define_context, &.{context});
         device.submit(bind_context, &.{ context, state, 0 });
-        device.submit(define_shader, &.{ 0, vertex_shader, @sizeOf(@TypeOf(passthrough)) });
-        device.submit(bind_shader, &.{ 0, code, 0 });
-        device.submit(define_shader, &.{ 1, pixel_shader, @sizeOf(@TypeOf(tint)) });
-        device.submit(bind_shader, &.{ 1, code, 256 });
+
+        for (programs, 0..) |words, index| {
+
+            const bytes = std.mem.sliceAsBytes(words);
+
+            @memcpy(program.bytes[index * program_room ..][0..bytes.len], bytes);
+            device.submit(define_shader, &.{ @intCast(index), if (index == 0) vertex_shader else pixel_shader, @intCast(bytes.len) });
+            device.submit(bind_shader, &.{ @intCast(index), code, @intCast(index * program_room) });
+
+        }
+
         device.submit(set_z_range, &.{ context, @bitCast(@as(f32, 0)), @bitCast(@as(f32, 1)) });
 
         // Flat shading takes a slow path on some hosts; colours arrive premultiplied, so blending adds what lies beneath.
@@ -384,15 +573,11 @@ pub const Gpu = struct {
 
         if (!settled) return null;
 
-        device.submit(set_render_target, &.{ context, color0, canvas, 0, 0 });
-        device.submit(set_viewport, &.{ context, 0, 0, width, height });
+        gpu.aim(canvas);
 
         device.retire();
         device.submit(define_target, &.{ 0, width, height, 0, 0, primary, 0 });
         device.submit(bind_target, &.{ 0, frame, 0, 0 });
-
-        gpu.columns = width;
-        gpu.rows = height;
 
         return gpu;
 
@@ -429,6 +614,7 @@ pub const Gpu = struct {
                 .shadow => |soft| self.shadow(gui.draw.move(soft.area, origin), soft.radius, soft.blur, soft.color, limit.intersect(gui.draw.move(soft.clip, origin)) orelse continue),
                 .form => |mark| self.form(mark.form.moved(@floatFromInt(origin.x), @floatFromInt(origin.y)), mark.color, limit.intersect(gui.draw.move(mark.clip, origin)) orelse continue),
                 .curve => |line| self.curve(line.points, origin, line.width, line.color, line.under, limit.intersect(gui.draw.move(line.clip, origin)) orelse continue),
+                .quartz => |pane| self.quartz(gui.draw.move(pane.area, origin), pane.radius, pane.color, limit.intersect(gui.draw.move(pane.clip, origin)) orelse continue),
 
             }
 
@@ -494,8 +680,7 @@ pub const Gpu = struct {
         const id: u32 = @intCast(pictures + slot);
 
         self.flush();
-        self.device.idle();
-        self.busy = false;
+        self.wait();
         self.device.submit(destroy_surface, &.{id});
         self.device.submit(destroy_object, &.{id});
         self.device.idle();
@@ -544,6 +729,7 @@ pub const Gpu = struct {
         };
 
         self.flush();
+        self.mode = mode;
         self.device.submit(set_render_state, &.{ context, source_blend, factors[0], target_blend, factors[1] });
 
     }
@@ -551,8 +737,7 @@ pub const Gpu = struct {
     /// Sends what follows to the layer, cleared to transparent over `area`, until `lower` lays it on the frame.
     pub fn lift(self: *Gpu, area: gui.Rect) void {
 
-        self.flush();
-        self.device.submit(set_render_target, &.{ context, color0, layer, 0, 0 });
+        self.aim(layer);
 
         // A window's corner may hang off the screen, but only the layer's own pixels can be cleared.
         const bounds = gui.Rect{
@@ -592,8 +777,7 @@ pub const Gpu = struct {
     /// Goes back to drawing on the frame, and lays `area` of the layer over `box` (left, top, right, bottom), faded to `opacity`, within `clip`.
     pub fn lower(self: *Gpu, area: gui.Rect, box: [4]f32, opacity: f32, clip: gui.Rect) void {
 
-        self.flush();
-        self.device.submit(set_render_target, &.{ context, color0, canvas, 0, 0 });
+        self.aim(canvas);
 
         const left = @max(box[0], @as(f32, @floatFromInt(clip.x)));
         const top = @max(box[1], @as(f32, @floatFromInt(clip.y)));
@@ -627,6 +811,97 @@ pub const Gpu = struct {
 
         self.flush();
         self.sample(atlas, nearest);
+
+    }
+
+    /// Fills `area`, corners rounded to `radius`, with what is already drawn under it softened, under `color`, within `clip`, as
+    /// `Canvas.quartz` does; see `gui.quartz`.
+    fn quartz(self: *Gpu, area: gui.Rect, radius: i32, color: u32, clip: gui.Rect) void {
+
+        if (!self.translucent) return self.rounded(area, radius, color & 0xffffff, clip);
+
+        const visible = area.intersect(clip) orelse return;
+        const plan = gui.quartz.Plan.of(visible, self.grid[0], self.grid[1]) orelse return;
+        const target = self.target;
+        const mode = self.mode;
+        const width: f32 = @floatFromInt(self.width);
+        const height: f32 = @floatFromInt(self.height);
+        const columns: f32 = @floatFromInt(self.grid[0]);
+        const rows: f32 = @floatFromInt(self.grid[1]);
+        const scale: f32 = gui.quartz.scale;
+        const r: f32 = @floatFromInt(@max(@min(radius, @divTrunc(@min(area.width, area.height), 2)), 0));
+        const span = [2]f32{ @as(f32, @floatFromInt(area.width)) / 2, @as(f32, @floatFromInt(area.height)) / 2 };
+        const amount = gui.canvas.opacity(color);
+        const across = spread(.{ 1 / columns, 0 });
+        const down = spread(.{ 0, 1 / rows });
+
+        // What lies behind is on the canvas even while drawing goes to the layer; softening replaces texels outright.
+        self.blending(.over);
+        self.pass(.gather, canvas, haze, &.{ .{ 1 / width, 1 / height, 0, 0 }, .{ 1 / width, -1 / height, 0, 0 } }, plan.gathered, .{ scale / width, scale / height });
+        self.pass(.blur, haze, smear, &across, plan.across, .{ 1 / columns, 1 / rows });
+        self.pass(.blur, smear, haze, &down, plan.down, .{ 1 / columns, 1 / rows });
+        self.blending(mode);
+
+        // Square corners still leave every pixel inside wholly covered, which a radius of a half would not.
+        self.pass(.frost, haze, target, &.{
+
+            .{ @as(f32, @floatFromInt(area.x)) + span[0], @as(f32, @floatFromInt(area.y)) + span[1], span[0] - r, span[1] - r },
+            .{ @max(r, 1) + 0.5, 0, scale * columns, scale * rows },
+            .{ channel(color, 16) * amount, channel(color, 8) * amount, channel(color, 0) * amount, amount },
+            .{ 1 - amount, 0, 0, 0 },
+
+        }, visible, .{ 1 / (scale * columns), 1 / (scale * rows) });
+
+        self.flush();
+        self.shader(.tint);
+        self.sample(atlas, nearest);
+
+    }
+
+    /// Draws `texels` of surface `into` with pixel shader `which`, given `constants` from c0 up, sampling surface `from` smoothly,
+    /// `step` texture coordinates per texel.
+    fn pass(self: *Gpu, which: Program, from: u32, into: u32, constants: []const [4]f32, texels: gui.Rect, step: [2]f32) void {
+
+        // Guest-backed contexts take constants inline: the first register, the shader type, floats, then four values per register.
+        var body: [4 + 4 * 4]u32 = .{ context, 0, pixel_shader, 0 } ++ .{0} ** 16;
+
+        for (constants, 0..) |values, index| {
+
+            for (values, 0..) |value, lane| body[4 + 4 * index + lane] = @bitCast(value);
+
+        }
+
+        self.aim(into);
+        self.sample(from, linear);
+        self.shader(which);
+        self.device.submit(set_constants, body[0 .. 4 + 4 * constants.len]);
+
+        const x: f32 = @floatFromInt(texels.x);
+        const y: f32 = @floatFromInt(texels.y);
+        const right: f32 = @floatFromInt(texels.right());
+        const bottom: f32 = @floatFromInt(texels.bottom());
+
+        self.stage(texels, .{ x * step[0], right * step[0] }, .{ y * step[1], bottom * step[1] }, 0xffffffff);
+
+    }
+
+    /// Sends what follows to surface `id`: the canvas, the layer, or one of Quartz's grids.
+    fn aim(self: *Gpu, id: u32) void {
+
+        const quarter = id == haze or id == smear;
+
+        self.flush();
+        if (!quarter) self.target = id;
+        self.columns = if (quarter) self.grid[0] else self.width;
+        self.rows = if (quarter) self.grid[1] else self.height;
+        self.device.submit(set_render_target, &.{ context, color0, id, 0, 0 });
+        self.device.submit(set_viewport, &.{ context, 0, 0, self.columns, self.rows });
+
+    }
+
+    fn shader(self: *Gpu, which: Program) void {
+
+        self.device.submit(set_shader, &.{ context, pixel_shader, @intFromEnum(which) });
 
     }
 
@@ -913,20 +1188,26 @@ pub const Gpu = struct {
     /// Stages one triangle, in clip space.
     fn emit(self: *Gpu, corners: [3]Vertex) void {
 
-        if (self.count == triangles) self.flush();
+        // Batches stage one after another, since the device may still be copying earlier ones out; once full, staging starts over when it has.
+        if (self.drawn + self.count == triangles) {
 
-        // The device may still be copying the last batch out of the staging memory.
-        if (self.busy) {
-
-            self.device.idle();
-            self.busy = false;
+            self.flush();
+            self.wait();
 
         }
 
-        const staged: *[3]Vertex = @ptrCast(@alignCast(self.vertices.bytes[self.count * triangle_bytes ..][0..triangle_bytes]));
+        const staged: *[3]Vertex = @ptrCast(@alignCast(self.vertices.bytes[(self.drawn + self.count) * triangle_bytes ..][0..triangle_bytes]));
 
         staged.* = corners;
         self.count += 1;
+
+    }
+
+    /// Waits until the device has run every queued command, so staging can start over.
+    fn wait(self: *Gpu) void {
+
+        self.device.idle();
+        self.drawn = 0;
 
     }
 
@@ -1191,22 +1472,23 @@ pub const Gpu = struct {
         if (self.count == 0) return;
 
         const stride = @sizeOf(Vertex);
+        const start: u32 = @intCast(self.drawn * triangle_bytes);
 
-        self.update(vertices, 0, 0, @intCast(self.count * triangle_bytes), 1);
+        self.update(vertices, start, 0, @intCast(self.count * triangle_bytes), 1);
 
         // Three arrays read the interleaved position, texture coordinate, and colour, then one unindexed range of triangles.
         self.device.submit(draw, &.{
 
             context, 3, 1,
-            float2, 0, position, 0, vertices, 0, stride, 0, 0,
-            float2, 0, texcoord, 0, vertices, 8, stride, 0, 0,
-            packed_color, 0, vertex_color, 0, vertices, 16, stride, 0, 0,
+            float2, 0, position, 0, vertices, start, stride, 0, 0,
+            float2, 0, texcoord, 0, vertices, start + 8, stride, 0, 0,
+            packed_color, 0, vertex_color, 0, vertices, start + 16, stride, 0, 0,
             triangle_list, @intCast(self.count), no_id, 0, 0, 0, 0,
 
         });
 
+        self.drawn += self.count;
         self.count = 0;
-        self.busy = true;
 
     }
 
@@ -1379,8 +1661,7 @@ pub const Gpu = struct {
     fn reset(self: *Gpu) void {
 
         self.flush();
-        self.device.idle();
-        self.busy = false;
+        self.wait();
 
         @memset(&slots, .{});
         self.filled = 0;
@@ -1437,8 +1718,7 @@ pub const Gpu = struct {
 
         self.flush();
         self.device.submit(readback_image, &.{ result, 0, 0 });
-        self.device.idle();
-        self.busy = false;
+        self.wait();
 
         const pixels: *const volatile [16]u32 = @ptrCast(self.readback.bytes);
 
@@ -1653,6 +1933,26 @@ fn between(a: Corner, b: Corner, t: f32) Corner {
         .color = color,
 
     };
+
+}
+
+/// The blur's constants for `shaders.blur`, sampling `step` texture coordinates further per texel along one axis.
+fn spread(step: [2]f32) [4][4]f32 {
+
+    const pairs = gui.quartz.pairs;
+    var values: [4][4]f32 = undefined;
+
+    for (values[0..3], pairs[1..]) |*value, taps| value.* = .{ taps[0] * step[0], taps[0] * step[1], 0, 0 };
+    values[3] = .{ pairs[0][1], pairs[1][1], pairs[2][1], pairs[3][1] };
+
+    return values;
+
+}
+
+/// The channel of `color` `shift` bits up, from 0 to 1.
+fn channel(color: u32, shift: u5) f32 {
+
+    return @as(f32, @floatFromInt(color >> shift & 0xff)) / 255;
 
 }
 

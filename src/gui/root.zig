@@ -14,6 +14,7 @@ pub const Face = font.Face;
 pub const Icon = font.Icon;
 pub const sans = font.sans;
 pub const theme = @import("theme.zig");
+pub const quartz = @import("quartz.zig");
 pub const png = @import("png.zig");
 pub const cursor = @import("cursor.zig");
 pub const Cursor = cursor.Cursor;

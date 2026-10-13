@@ -135,7 +135,7 @@ var list = gui.box(.{
     .padding = .all(theme.gap),
     .gap = 1,
 
-    .background = theme.raised,
+    .background = theme.pane,
     .scroll = true,
 
 }, &.{});

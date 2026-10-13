@@ -335,12 +335,12 @@ pub const Window = struct {
         const changed = self.damage.intersect(bounds);
         if (changed == null and self.surface.attached) return;
 
-        // Every change re-records the tree, though the display draws afresh only what changed; a root draws its own background, rounded, and only windows get one when it has none.
+        // Every change re-records the tree, though the display draws afresh only what changed; a root draws its own background, rounded,
+        // and a window's without one shows the Quartz the window manager lays under it.
         const background = self.root.style.background orelse theme.background;
 
         self.damage = .{};
         target.reset();
-        if (self.root.style.background == null and self.surface.spec.layer == .window) target.fill(bounds, background);
 
         const marks = node.Marks{
 

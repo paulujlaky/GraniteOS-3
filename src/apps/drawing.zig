@@ -147,7 +147,7 @@ var footer = gui.box(.{
     .direction = .row,
     .items = .center,
 
-    .background = theme.raised,
+    .background = theme.pane,
 
 }, &footer_parts);
 

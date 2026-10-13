@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const font = @import("font.zig");
+const softening = @import("quartz.zig");
 
 pub const Point = struct {
 
@@ -306,6 +307,9 @@ pub const Canvas = struct {
     /// Drawing outside this, when set, is discarded.
     limit: ?Rect = null,
 
+    /// Room to soften what lies under Quartz in, as `quartz.room` sizes it; without it, Quartz draws solid.
+    spare: []u32 = &.{},
+
     pub fn bounds(self: *const Canvas) Rect {
 
         return .{
@@ -353,10 +357,55 @@ pub const Canvas = struct {
             for (clipped.left..clipped.right) |x| {
 
                 const fx = @as(f32, @floatFromInt(x)) + 0.5;
-                const dx = fx - std.math.clamp(fx, left + r, right - r);
-                const inside = if (dx == 0 and dy == 0) 1 else r - @sqrt(dx * dx + dy * dy) + 0.5;
 
-                blend(&row[x], color, @min(inside, 1) * alpha);
+                blend(&row[x], color, covered(fx - std.math.clamp(fx, left + r, right - r), dy, r) * alpha);
+
+            }
+
+        }
+
+    }
+
+    /// Fills `area`, corners rounded to `radius`, with what is already drawn under it softened, under `tint`; see `quartz`. Without
+    /// `spare` room to soften in, as with Quartz switched off, it draws `tint` solid.
+    pub fn quartz(self: *Canvas, area: Rect, radius: i32, tint: u32) void {
+
+        if (self.spare.len < softening.room(self.width, self.height)) return self.round(area, radius, tint & 0xffffff);
+
+        const size = softening.grid(self.width, self.height);
+        const visible = area.intersect(self.region() orelse return) orelse return;
+        const plan = softening.Plan.of(visible, size[0], size[1]) orelse return;
+        const soft = self.spare[0 .. size[0] * size[1]];
+        const r: f32 = @floatFromInt(@max(@min(radius, @divTrunc(@min(area.width, area.height), 2)), 0));
+        const left: f32 = @floatFromInt(area.x);
+        const top: f32 = @floatFromInt(area.y);
+        const right: f32 = @floatFromInt(area.right());
+        const bottom: f32 = @floatFromInt(area.bottom());
+
+        softening.soften(self, plan, self.spare, tint);
+
+        for (@intCast(visible.y)..@intCast(visible.bottom())) |y| {
+
+            const fy = @as(f32, @floatFromInt(y)) + 0.5;
+            const dy = fy - std.math.clamp(fy, top + r, bottom - r);
+            const down = between(y, size[1]);
+            const upper = soft[down.first * size[0] ..][0..size[0]];
+            const lower = soft[down.second * size[0] ..][0..size[0]];
+            const row = self.pixels[y * self.width ..];
+
+            for (@intCast(visible.x)..@intCast(visible.right())) |x| {
+
+                const fx = @as(f32, @floatFromInt(x)) + 0.5;
+                const inside = covered(fx - std.math.clamp(fx, left + r, right - r), dy, r);
+                if (inside <= 0) continue;
+
+                const across = between(x, size[0]);
+                const near = softening.splat(8 - across.along);
+                const far = softening.splat(across.along);
+                const above = softening.split(upper[across.first]) * near + softening.split(upper[across.second]) * far;
+                const below = softening.split(lower[across.first]) * near + softening.split(lower[across.second]) * far;
+
+                blend(&row[x], softening.join(above * softening.splat(8 - down.along) + below * softening.splat(down.along), 64), inside);
 
             }
 
@@ -709,6 +758,30 @@ pub fn anchor(face: *const font.Font, string: []const u8, size: f32, area: Rect,
 
         },
         .y = area.y + @as(i32, @intFromFloat(@round(@min((tall + height) / 2, tall - descent)))),
+
+    };
+
+}
+
+/// How much of a pixel a shape with corners of radius `r` covers, its centre `dx` and `dy` past the centres of the corners' curves.
+fn covered(dx: f32, dy: f32, r: f32) f32 {
+
+    return if (dx == 0 and dy == 0) 1 else @min(r - @sqrt(dx * dx + dy * dy) + 0.5, 1);
+
+}
+
+/// The two texels of a `count`-texel Quartz grid line that pixel `pixel` samples between, and how far along, in eighths, from the first.
+fn between(pixel: usize, count: usize) struct { first: usize, second: usize, along: u32 } {
+
+    // A texel spans `quartz.scale` pixels, so the pixel's centre lies (2 * pixel - 3) / 8 texels past the centre of texel 0.
+    const at = 2 * @as(i64, @intCast(pixel)) - 3;
+    const first = @divFloor(at, 8);
+
+    return .{
+
+        .first = @intCast(std.math.clamp(first, 0, @as(i64, @intCast(count)) - 1)),
+        .second = @intCast(std.math.clamp(first + 1, 0, @as(i64, @intCast(count)) - 1)),
+        .along = @intCast(at - 8 * first),
 
     };
 

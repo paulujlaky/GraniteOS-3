@@ -365,6 +365,13 @@ pub const Display = struct {
 
     }
 
+    /// Session only: shows what lies behind Quartz, softened, or draws its tints solid, as the user chose.
+    pub fn quartz(self: *Display, translucent: bool) api.ServiceError!void {
+
+        _ = try self.request(.quartz, @intFromBool(translucent), &.{});
+
+    }
+
     /// Makes the shared pixels `handle`, `width` by `height` premultiplied 0xAARRGGBB, drawable by image commands; again after changing them,
     /// naming the `changed` area when only that did, so less goes to the GPU.
     pub fn image(self: *Display, handle: u64, width: u32, height: u32, changed: ?Area) api.ServiceError!void {

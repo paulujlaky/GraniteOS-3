@@ -77,8 +77,11 @@ var scenery = gui.box(.{
 
 var files = api.Files{};
 
-/// The `desktop` config, where Settings saves the wallpaper as `wallpaper=PATH`.
+/// The `desktop` config, where Settings saves the wallpaper as `wallpaper=PATH`, and `quartz=off` when Quartz draws solid.
 var preferences = api.Config{};
+
+/// Whether Quartz shows what lies behind it, as the user chose.
+var translucent = true;
 
 // Top bar.
 var apps_icon = gui.icon(.grid, theme.icon);
@@ -126,7 +129,8 @@ var bar_root = gui.box(.{
     .gap = 4,
     .items = .stretch,
 
-    .background = theme.glass,
+    .background = theme.quartz,
+    .quartz = true,
 
 }, &bar_parts);
 
@@ -242,16 +246,20 @@ pub fn start(name: []const u8) void {
 
     bar.show();
     dock.window.show();
+    reload(.all);
     claim();
-    reload();
     refresh();
 
 }
 
-/// Keeps the rows of the bar and dock out of maximised windows' way.
+/// Keeps the rows of the bar and dock out of maximised windows' way, and Quartz as the user chose.
 fn claim() void {
 
     gui.display.reserve(height, dock.reach) catch {
+
+    };
+
+    gui.display.quartz(translucent) catch {
 
     };
 
@@ -401,7 +409,7 @@ pub fn serve() void {
 
             .reload => blk: {
 
-                reload();
+                reload(std.enums.fromInt(catalog.Reload, protocol.value(request.second)) orelse .all);
                 break :blk 0;
 
             },
@@ -623,10 +631,19 @@ fn shutdown() void {
 
 }
 
-/// Shows the wallpaper the user chose in Settings, or granite when there is none or it will not load.
-fn reload() void {
+/// Shows Quartz and, unless only that changed, the wallpaper as the user chose in Settings: granite when there is none or it will
+/// not load.
+fn reload(what: catalog.Reload) void {
 
     preferences.open(user_label.content.label, "desktop");
+    translucent = !std.mem.eql(u8, preferences.get("quartz") orelse "", "off");
+
+    gui.display.quartz(translucent) catch {
+
+    };
+
+    if (what == .quartz) return;
+
     replace(preferences.get("wallpaper"));
     pins.load(user_label.content.label);
 

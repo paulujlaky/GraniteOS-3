@@ -410,8 +410,17 @@ pub const Node = struct {
         const color = colors.color orelse box.color;
         const inner_area = self.inner();
         const limit = target.limit;
+        const bordered = colors.border != null and box.border_width > 0;
 
-        if (colors.border != null and box.border_width > 0) {
+        // Under an opaque background the border fills in, meeting it without a seam; over anything letting what lies behind show
+        // through, it is traced instead.
+        const filled = bordered and !box.quartz and colors.background != null and colors.background.? >> 24 == 0;
+
+        if (box.quartz) {
+
+            target.quartz(self.rect, box.radius, colors.background orelse theme.quartz);
+
+        } else if (filled) {
 
             target.round(self.rect, box.radius, colors.border.?);
             target.round(self.rect.inset(box.border_width), box.radius - box.border_width, fill);
@@ -421,6 +430,8 @@ pub const Node = struct {
             target.round(self.rect, box.radius, background);
 
         }
+
+        if (bordered and !filled) target.outline(self.rect, @floatFromInt(box.radius), @floatFromInt(box.border_width), colors.border.?);
 
         defer target.limit = limit;
 

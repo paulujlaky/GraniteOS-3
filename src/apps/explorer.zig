@@ -140,7 +140,7 @@ var places = gui.box(.{
     .padding = .all(theme.gap),
     .gap = 2,
 
-    .background = theme.raised,
+    .background = theme.pane,
 
 }, &places_parts);
 

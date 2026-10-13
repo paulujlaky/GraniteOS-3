@@ -1,4 +1,4 @@
-//! Settings: the display mode, the wallpaper, and accounts.
+//! Settings: the display mode, the wallpaper and Quartz, and accounts.
 
 const std = @import("std");
 
@@ -72,7 +72,7 @@ var sidebar = gui.box(.{
     .padding = .all(theme.gap),
     .gap = 2,
 
-    .background = theme.raised,
+    .background = theme.pane,
 
 }, &tab_list);
 
@@ -123,7 +123,22 @@ var picture_row = gui.box(.{
 }, &picture_parts);
 
 var appearance_status = gui.label("", theme.caption);
-var appearance_parts = [_]*gui.Node{ &appearance_title, &appearance_note, &granite, &picture_row, &appearance_status };
+var effects_title = gui.label("Effects", theme.title_text);
+
+/// Selected while Quartz shows what lies behind it.
+var quartz = gui.button("Quartz", &toggleQuartz);
+var quartz_note = gui.label("Softens what lies behind bars, menus, and windows.", theme.caption);
+var quartz_parts = [_]*gui.Node{ &quartz, &quartz_note };
+
+var quartz_row = gui.box(.{
+
+    .direction = .row,
+    .gap = theme.spacing,
+    .items = .center,
+
+}, &quartz_parts);
+
+var appearance_parts = [_]*gui.Node{ &appearance_title, &appearance_note, &granite, &picture_row, &appearance_status, &effects_title, &quartz_row };
 
 var appearance_page = gui.box(.{
 
@@ -320,6 +335,9 @@ fn show(section: Section) void {
         .accounts => loadAccounts(),
         .appearance => {
 
+            preferences.open(user, "desktop");
+            quartz.selected = !std.mem.eql(u8, preferences.get("quartz") orelse "", "off");
+
         },
 
     }
@@ -360,17 +378,48 @@ fn setMode(row: *gui.Node) void {
 
 }
 
-/// Saves the wallpaper choice, empty for granite, in the `desktop` config and asks the desktop to show it.
-fn wallpaper(choice: []const u8) void {
+/// Saves `value` as `key` in the `desktop` config and asks the desktop to show `what` changed; false, noting why, when it could not.
+fn prefer(key: []const u8, value: []const u8, what: catalog.Reload) bool {
 
     preferences.open(user, "desktop");
-    if (!preferences.set("wallpaper", choice)) return note(error.Invalid);
-    preferences.save() catch |err| return note(err);
 
-    _ = api.call(session, protocol.pack(.reload, 0)) catch {
+    if (!preferences.set(key, value)) {
+
+        note(error.Invalid);
+        return false;
+
+    }
+
+    preferences.save() catch |err| {
+
+        note(err);
+        return false;
 
     };
+
+    _ = api.call(session, protocol.pack(.reload, @intFromEnum(what))) catch {
+
+    };
+
+    return true;
+
+}
+
+/// Saves the wallpaper choice, empty for granite, and has the desktop show it.
+fn wallpaper(choice: []const u8) void {
+
+    if (!prefer("wallpaper", choice, .all)) return;
+
     appearance_status.content.label = "Wallpaper changed.";
+    window.refresh();
+
+}
+
+fn toggleQuartz(_: *gui.Node) void {
+
+    if (!prefer("quartz", if (quartz.selected) "off" else "on", .quartz)) return;
+
+    quartz.selected = !quartz.selected;
     window.refresh();
 
 }

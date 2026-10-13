@@ -43,7 +43,8 @@ var root = gui.box(.{
     .gap = 6,
     .items = .center,
 
-    .background = theme.glass,
+    .background = theme.quartz,
+    .quartz = true,
     .border = theme.line,
     .border_width = theme.border,
     .radius = 16,

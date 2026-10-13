@@ -4,6 +4,7 @@ const font = @import("font.zig");
 const canvas = @import("canvas.zig");
 const draw = @import("draw.zig");
 const node = @import("node.zig");
+const quartz = @import("quartz.zig");
 const sketch = @import("sketch.zig");
 const text = @import("text.zig");
 
@@ -731,6 +732,78 @@ test "labels keep descenders inside a box one line tall and stay centred in tall
     const capital = @as(f32, @floatFromInt(face.capital)) * 15 / face.units;
 
     try std.testing.expectEqual(@as(i32, @intFromFloat(@round((32 + capital) / 2))), canvas.anchor(face, "Save", 15, button, .center).y);
+
+}
+
+test "recorded Quartz softens what lies beneath under its tint, rounds its corners, and draws solid without room" {
+
+    var pixels: [64 * 48]u32 = undefined;
+    var spare: [quartz.room(64, 48)]u32 = undefined;
+    var bytes: [256]u8 align(4) = undefined;
+
+    var target = canvas.Canvas{
+
+        .pixels = &pixels,
+        .width = 64,
+        .height = 48,
+        .spare = &spare,
+
+    };
+
+    var list = draw.List{
+
+        .bytes = &bytes,
+        .width = 64,
+        .height = 48,
+
+    };
+
+    const area = canvas.Rect{
+
+        .x = 8,
+        .y = 8,
+        .width = 48,
+        .height = 32,
+
+    };
+
+    // Black meets white at x = 32; a clear tint shows the blur alone.
+    for (0..48) |y| {
+
+        for (0..64) |x| pixels[y * 64 + x] = if (x < 32) 0x000000 else 0xffffff;
+
+    }
+
+    list.quartz(area, 8, 0xff000000);
+    draw.replay(&target, list.commands(), .{}, target.bounds(), null);
+
+    try std.testing.expect(pixels[24 * 64 + 10] & 0xff < 0x08);
+    try std.testing.expect(pixels[24 * 64 + 53] & 0xff > 0xf7);
+    try std.testing.expect(pixels[24 * 64 + 26] & 0xff > 0x10);
+    try std.testing.expect(pixels[24 * 64 + 31] & 0xff > 0x40 and pixels[24 * 64 + 32] & 0xff < 0xc0);
+    try std.testing.expectEqual(0x000000, pixels[24 * 64 + 6]);
+
+    // Over flat grey, a quarter-opaque white tint lightens it evenly, and the corners stay outside the curve.
+    @memset(&pixels, 0x808080);
+    list.reset();
+    list.quartz(area, 8, canvas.shade(0xffffff, 64));
+    draw.replay(&target, list.commands(), .{}, target.bounds(), null);
+
+    try std.testing.expect(pixels[24 * 64 + 32] & 0xff >= 0x9d and pixels[24 * 64 + 32] & 0xff <= 0xa1);
+    try std.testing.expectEqual(pixels[24 * 64 + 32], pixels[12 * 64 + 50]);
+    try std.testing.expectEqual(0x808080, pixels[8 * 64 + 8]);
+
+    target.spare = &.{};
+    draw.replay(&target, list.commands(), .{}, target.bounds(), null);
+
+    try std.testing.expectEqual(0xffffff, pixels[24 * 64 + 32]);
+
+    // The GPU's merged taps weigh the same as the CPU's.
+    var total = quartz.pairs[0][1];
+
+    for (quartz.pairs[1..]) |pair| total += 2 * pair[1];
+
+    try std.testing.expectApproxEqAbs(1, total, 0.0001);
 
 }
 
