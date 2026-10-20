@@ -106,6 +106,10 @@ var root = gui.box(theme.popup.with(.{
 
 pub var window: gui.Window = undefined;
 
+/// The launcher's size at 100%.
+const width = 620;
+const height = 440;
+
 /// Opens the launcher, hidden, with its top-left corner at `at`.
 pub fn init(at: gui.Point) void {
 
@@ -166,14 +170,28 @@ pub fn init(at: gui.Point) void {
 
         .x = at.x,
         .y = at.y,
-        .width = 620,
-        .height = 440,
+        .width = gui.px(width),
+        .height = gui.px(height),
 
         .hidden = true,
         .motion = .drop,
         .shadow = true,
 
     }) catch api.exit(3);
+
+}
+
+/// Puts the launcher's top-left corner at `at`, sized for the interface scale.
+pub fn place(at: gui.Point) void {
+
+    window.move(.{
+
+        .x = at.x,
+        .y = at.y,
+        .width = gui.px(width),
+        .height = gui.px(height),
+
+    });
 
 }
 

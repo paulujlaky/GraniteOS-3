@@ -591,9 +591,9 @@ fn refresh() void {
 
     window.move(.{
 
-        .x = corner.x - width,
+        .x = corner.x - gui.px(width),
         .y = corner.y,
-        .width = width,
+        .width = gui.px(width),
         .height = size.height,
 
     });

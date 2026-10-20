@@ -23,6 +23,7 @@ pub const style = @import("style.zig");
 pub const Style = style.Style;
 pub const Paint = style.Paint;
 pub const Edges = style.Edges;
+pub const px = style.px;
 
 pub const Node = @import("node.zig").Node;
 pub const Track = @import("node.zig").Track;

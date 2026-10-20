@@ -220,7 +220,7 @@ fn fill() void {
     const rows_height: i32 = @intCast(count * 50 + (count -| 1) * 2);
     const height = 16 + theme.control + 4 + if (count == 0) 60 else rows_height;
 
-    window.move(screen.centered(width, height));
+    window.move(screen.centered(gui.px(width), gui.px(height)));
 
 }
 

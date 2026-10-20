@@ -6,6 +6,7 @@ const canvas = @import("canvas.zig");
 const font = @import("font.zig");
 const node = @import("node.zig");
 const root = @import("root.zig");
+const style = @import("style.zig");
 const theme = @import("theme.zig");
 const window = @import("window.zig");
 
@@ -137,9 +138,13 @@ pub fn Menu(comptime choices: []const Choice) type {
 
             var area = self.window.surface.list.bounds();
 
+            const size = self.root.measure();
+
+            // Measured afresh, as the interface scale may have changed since it opened.
             area.x = at.x;
             area.y = at.y;
-            area.height = self.root.measure().height;
+            area.width = @max(size.width + style.px(theme.spacing), style.px(narrowest));
+            area.height = size.height;
             self.window.surface.spec.anchor = if (self.owner) |parent| @intCast(parent.surface.id) else api.display.Spec.none;
             self.window.focus(null);
             self.window.move(area);

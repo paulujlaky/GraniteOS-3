@@ -178,7 +178,7 @@ fn open(backwards: bool) bool {
     const size: i32 = @intCast(count);
     const width = size * tile + (size - 1) * 6 + 20;
 
-    window.move(screen.centered(width, 116));
+    window.move(screen.centered(gui.px(width), gui.px(116)));
     window.show();
 
     return true;

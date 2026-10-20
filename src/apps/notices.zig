@@ -117,8 +117,8 @@ pub fn init(screen: gui.Rect, top: i32) void {
 
         .layer = .panel,
 
-        .width = width,
-        .height = tall,
+        .width = gui.px(width),
+        .height = gui.px(tall),
 
         .hidden = true,
         .motion = .drop,
@@ -134,8 +134,8 @@ pub fn place(screen: gui.Rect, top: i32) void {
 
     corner = .{
 
-        .x = screen.width - width - gap,
-        .y = top + gap,
+        .x = screen.width - gui.px(width + gap),
+        .y = top + gui.px(gap),
 
     };
 
@@ -235,8 +235,8 @@ fn fit() void {
         .x = corner.x,
         .y = corner.y,
 
-        .width = width,
-        .height = count * tall + (count - 1) * gap,
+        .width = gui.px(width),
+        .height = count * gui.px(tall) + (count - 1) * gui.px(gap),
 
     });
 

@@ -191,14 +191,14 @@ const Surface = struct {
     /// Everything it may draw on: the frame and its shadow.
     fn footprint(self: *const Surface) gui.Rect {
 
-        return if (self.decorated() or self.options.shadow) self.frame().inset(-spread) else self.area;
+        return if (self.decorated() or self.options.shadow) self.frame().inset(-gui.px(spread)) else self.area;
 
     }
 
     /// Where the pointer reaches it, edges included.
     fn reach(self: *const Surface) gui.Rect {
 
-        return if (self.resizable()) self.frame().inset(-grip) else self.frame();
+        return if (self.resizable()) self.frame().inset(-gui.px(grip)) else self.frame();
 
     }
 
@@ -211,7 +211,7 @@ const Surface = struct {
     /// The radius of its frame's corners: square once tiled, so tiles meet the screen's edges and each other cleanly.
     fn rounding(self: *const Surface) i32 {
 
-        return if (self.tile == .free) theme.corner else 0;
+        return if (self.tile == .free) gui.px(theme.corner) else 0;
 
     }
 
@@ -226,14 +226,14 @@ const Surface = struct {
     fn controls(self: *const Surface) gui.Rect {
 
         const outer = self.frame();
-        const width = control * @as(i32, if (self.options.fixed) 2 else 3) + border;
+        const width = gui.px(control) * @as(i32, if (self.options.fixed) 2 else 3) + border;
 
         return .{
 
             .x = outer.right() - width,
             .y = outer.y,
             .width = width,
-            .height = theme.title,
+            .height = gui.px(theme.title),
 
         };
 
@@ -281,7 +281,7 @@ const Surface = struct {
             .x = outer.x,
             .y = outer.y,
             .width = outer.width,
-            .height = theme.title,
+            .height = gui.px(theme.title),
 
         };
 
@@ -791,8 +791,8 @@ fn settle() void {
 
         } else if (surface.decorated()) {
 
-            surface.area.x = std.math.clamp(surface.area.x, theme.title - surface.area.width, width - theme.title);
-            surface.area.y = std.math.clamp(surface.area.y, work().y + theme.title, height - border);
+            surface.area.x = std.math.clamp(surface.area.x, gui.px(theme.title) - surface.area.width, width - gui.px(theme.title));
+            surface.area.y = std.math.clamp(surface.area.y, work().y + gui.px(theme.title), height - border);
 
         }
 
@@ -803,6 +803,10 @@ fn settle() void {
 fn load() ?gui.Rect {
 
     saved.open(api.config.system, "display");
+
+    const percent = saved.number(u8, "scale") orelse 100;
+
+    if (stepped(percent)) gui.style.scale = percent;
 
     const size = gui.Rect{
 
@@ -847,7 +851,7 @@ fn respond(request: api.Request) ?u64 {
     return switch (protocol.operation(request.second)) {
 
         .hello => protocol.version,
-        .info => back.width | back.height << 16 | describe(),
+        .info => back.width | back.height << 16 | describe() | @as(u64, @intCast(gui.style.scale)) << 56,
         .surface => attach(request, value),
         .place => place(request, value),
         .mode => mode(request, value),
@@ -863,6 +867,7 @@ fn respond(request: api.Request) ?u64 {
         .capture => snapshot(request),
         .cursor => pointing(request, value),
         .quartz => quartz(request, value),
+        .scale => rescale(value),
         .crash => if (request.first == api.raw(.owner, 0, 0, 0).first) fault() else protocol.invalid,
         else => protocol.invalid,
 
@@ -1182,6 +1187,79 @@ fn quartz(request: api.Request, value: u64) u64 {
     compose(back.bounds());
 
     return 0;
+
+}
+
+/// Whether `percent` is an interface scale people may pick: a step of 25 from 100 to 200.
+fn stepped(percent: u64) bool {
+
+    return percent >= 100 and percent <= 200 and percent % 25 == 0;
+
+}
+
+/// Sets the interface scale, which anyone may change as it only changes how things look: windows grow or shrink with it, their
+/// title bars too, and every surface hears of it to lay itself out again.
+fn rescale(value: u64) u64 {
+
+    if (!stepped(value)) return protocol.invalid;
+
+    const before = gui.style.scale;
+    const after: i32 = @intCast(value);
+
+    if (after == before) return 0;
+
+    gui.style.scale = after;
+
+    for (&surfaces, 0..) |*surface, index| {
+
+        if (surface.client == 0 or surface.leaving or !surface.decorated() or surface.options.fill) continue;
+
+        surface.restore = grown(surface.restore, before, after);
+        if (surface.tile == .free) reshape(index, grown(surface.area, before, after));
+
+    }
+
+    // Tiles refit under their taller or shorter title bars, and free windows stay on the screen.
+    settle();
+
+    for (&surfaces, 0..) |*surface, index| {
+
+        if (surface.client == 0 or surface.leaving) continue;
+
+        queue(index, .{
+
+            .kind = .notice,
+            .code = @intFromEnum(api.Event.Notice.scale),
+
+        });
+
+        deliver(client(surface.client).?);
+
+    }
+
+    compose(back.bounds());
+    _ = saved.set("scale", after);
+    saved.save() catch api.log("display: could not save the scale\n");
+
+    return 0;
+
+}
+
+/// `area` with its size taken from scale `before` to `after`, moved and shrunk as needed to stay within the work area.
+fn grown(area: gui.Rect, before: i32, after: i32) gui.Rect {
+
+    const room = inside(work());
+    const width = std.math.clamp(@divTrunc(area.width * after, before), 1, @max(room.width, 1));
+    const height = std.math.clamp(@divTrunc(area.height * after, before), 1, @max(room.height, 1));
+
+    return .{
+
+        .x = std.math.clamp(area.x, room.x, room.right() - width),
+        .y = std.math.clamp(area.y, room.y, room.bottom() - height),
+        .width = width,
+        .height = height,
+
+    };
 
 }
 
@@ -2148,7 +2226,7 @@ fn follow(grab_state: Grab) void {
         const target = aim(pointer);
 
         area.x += dx;
-        area.y = std.math.clamp(origin.y + dy, work().y + theme.title, @as(i32, @intCast(back.height)) - border);
+        area.y = std.math.clamp(origin.y + dy, work().y + gui.px(theme.title), @as(i32, @intCast(back.height)) - border);
         surface.area = area;
         compose(before.join(surface.footprint()));
 
@@ -2167,22 +2245,22 @@ fn follow(grab_state: Grab) void {
 
     if (sides.left) {
 
-        area.width = @max(origin.width - dx, least.width);
+        area.width = @max(origin.width - dx, gui.px(least.width));
         area.x = origin.x + origin.width - area.width;
 
     }
 
-    if (sides.right) area.width = @max(origin.width + dx, least.width);
+    if (sides.right) area.width = @max(origin.width + dx, gui.px(least.width));
 
     if (sides.top) {
 
-        area.height = @max(origin.height - dy, least.height);
-        area.y = @max(origin.y + origin.height - area.height, work().y + theme.title);
+        area.height = @max(origin.height - dy, gui.px(least.height));
+        area.y = @max(origin.y + origin.height - area.height, work().y + gui.px(theme.title));
         area.height = origin.y + origin.height - area.y;
 
     }
 
-    if (sides.bottom) area.height = @max(origin.height + dy, least.height);
+    if (sides.bottom) area.height = @max(origin.height + dy, gui.px(least.height));
 
     reshape(grab_state.index, area);
 
@@ -2252,8 +2330,8 @@ fn guide() gui.draw.List {
 
     const zone = (aimed.zone() orelse return list).inset(8);
 
-    list.round(zone, theme.corner + 2, gui.shade(0xffffff, 40));
-    list.round(zone.inset(2), theme.corner, gui.shade(0x000000, 60));
+    list.round(zone, gui.px(theme.corner) + 2, gui.shade(0xffffff, 40));
+    list.round(zone.inset(2), gui.px(theme.corner), gui.shade(0x000000, 60));
 
     return list;
 
@@ -2668,7 +2746,7 @@ fn hideaway() void {
         if (!surface.options.tuck or surface.client == 0 or !surface.shown or surface.leaving) continue;
 
         // A drag reaching the bottom, such as of a window, leaves a tucked panel be.
-        const reached = if (surface.tucked) buttons == 0 and pointer.y >= bottom - brink else pointer.y >= surface.area.y - grip;
+        const reached = if (surface.tucked) buttons == 0 and pointer.y >= bottom - brink else pointer.y >= surface.area.y - gui.px(grip);
         const tuck = covered and !reached;
 
         if (tuck == surface.tucked) continue;
@@ -2797,7 +2875,7 @@ fn trim(index: usize) gui.draw.List {
 
     // A soft shadow a little below the frame, darker under the window in front.
     below.y += 3;
-    if (surface.options.shadow or surface.decorated()) list.shadow(below, radius, spread - 4, gui.shade(0x000000, if (active and surface.decorated()) 96 else 64));
+    if (surface.options.shadow or surface.decorated()) list.shadow(below, radius, gui.px(spread) - 4, gui.shade(0x000000, if (active and surface.decorated()) 96 else 64));
     if (!surface.decorated()) return list;
 
     const bar = gui.Rect{
@@ -2805,7 +2883,7 @@ fn trim(index: usize) gui.draw.List {
         .x = frame.x,
         .y = frame.y,
         .width = frame.width,
-        .height = theme.title,
+        .height = gui.px(theme.title),
 
     };
 
@@ -2845,10 +2923,10 @@ fn trim(index: usize) gui.draw.List {
 
         const spot = gui.Rect{
 
-            .x = right - control,
+            .x = right - gui.px(control),
             .y = bar.y + border,
-            .width = control,
-            .height = theme.title - border,
+            .width = gui.px(control),
+            .height = gui.px(theme.title) - border,
 
         };
 
@@ -2868,9 +2946,9 @@ fn trim(index: usize) gui.draw.List {
             .maximize => .maximize,
             else => .minimize,
 
-        }, if (which == .maximize) 12 else 15, spot, if (lit and which == .close) 0xffffff else if (active) theme.text else theme.muted);
+        }, @as(f32, if (which == .maximize) 12 else 15) * gui.style.factor(), spot, if (lit and which == .close) 0xffffff else if (active) theme.text else theme.muted);
 
-        right -= control;
+        right -= gui.px(control);
 
     }
 
@@ -2883,12 +2961,12 @@ fn trim(index: usize) gui.draw.List {
 
     };
 
-    list.label(surface.name(), .sans, theme.small, .{
+    list.label(surface.name(), .sans, theme.small * gui.style.factor(), .{
 
-        .x = bar.x + theme.spacing,
+        .x = bar.x + gui.px(theme.spacing),
         .y = bar.y,
-        .width = right - bar.x - theme.spacing,
-        .height = theme.title,
+        .width = right - bar.x - gui.px(theme.spacing),
+        .height = gui.px(theme.title),
 
     }, if (active) theme.text else theme.muted, .left);
 
@@ -2907,9 +2985,9 @@ fn part(index: usize, at: gui.Point) Part {
     const frame = surface.frame();
     if (surface.resizable() and !frame.inset(hold).contains(at) and !surface.controls().contains(at)) return .edge;
     if (surface.area.contains(at)) return .content;
-    if (at.y >= frame.y + theme.title or at.x < frame.x + border) return .title;
+    if (at.y >= frame.y + gui.px(theme.title) or at.x < frame.x + border) return .title;
 
-    const slot = @divTrunc(frame.right() - border - 1 - at.x, control);
+    const slot = @divTrunc(frame.right() - border - 1 - at.x, gui.px(control));
     const fixed = surface.options.fixed;
 
     return switch (slot) {
@@ -2939,15 +3017,15 @@ fn edges(index: usize, at: gui.Point) Edges {
 
     if (sides.left or sides.right) {
 
-        sides.top = sides.top or at.y < frame.y + corner_grip;
-        sides.bottom = sides.bottom or at.y >= frame.bottom() - corner_grip;
+        sides.top = sides.top or at.y < frame.y + gui.px(corner_grip);
+        sides.bottom = sides.bottom or at.y >= frame.bottom() - gui.px(corner_grip);
 
     }
 
     if (sides.top or sides.bottom) {
 
-        sides.left = sides.left or at.x < frame.x + corner_grip;
-        sides.right = sides.right or at.x >= frame.right() - corner_grip;
+        sides.left = sides.left or at.x < frame.x + gui.px(corner_grip);
+        sides.right = sides.right or at.x >= frame.right() - gui.px(corner_grip);
 
     }
 
@@ -3043,9 +3121,9 @@ fn inside(area: gui.Rect) gui.Rect {
     return .{
 
         .x = area.x + border,
-        .y = area.y + theme.title,
+        .y = area.y + gui.px(theme.title),
         .width = area.width - 2 * border,
-        .height = area.height - theme.title - border,
+        .height = area.height - gui.px(theme.title) - border,
 
     };
 
@@ -3066,8 +3144,8 @@ fn pop(owner: u64, anchor: u8, area: gui.Rect) gui.Rect {
     const width: i32 = @intCast(back.width);
     const height: i32 = @intCast(back.height);
 
-    result.x = @max(@min(result.x, width - result.width - theme.gap), theme.gap);
-    result.y = @max(@min(result.y, height - result.height - theme.gap), theme.gap);
+    result.x = @max(@min(result.x, width - result.width - gui.px(theme.gap)), gui.px(theme.gap));
+    result.y = @max(@min(result.y, height - result.height - gui.px(theme.gap)), gui.px(theme.gap));
 
     return result;
 
@@ -3102,8 +3180,8 @@ fn arrival(area: gui.Rect) gui.Rect {
 
     }
 
-    const width = std.math.clamp(area.width, least.width, room.width);
-    const height = std.math.clamp(area.height, least.height, room.height);
+    const width = std.math.clamp(area.width, gui.px(least.width), room.width);
+    const height = std.math.clamp(area.height, gui.px(least.height), room.height);
     const step = @mod(count, 6) * 24 - 60;
     var placed = room.centered(width, height);
 
@@ -3128,9 +3206,9 @@ fn outline(area: gui.Rect) gui.Rect {
     return .{
 
         .x = area.x - border,
-        .y = area.y - theme.title,
+        .y = area.y - gui.px(theme.title),
         .width = area.width + 2 * border,
-        .height = area.height + theme.title + border,
+        .height = area.height + gui.px(theme.title) + border,
 
     };
 

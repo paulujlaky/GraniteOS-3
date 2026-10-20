@@ -174,7 +174,7 @@ pub fn place(area: gui.Rect) void {
     const goal = gui.Rect{
 
         .x = @divTrunc(area.width - size.width, 2),
-        .y = area.height - size.height - margin,
+        .y = area.height - size.height - gui.px(margin),
         .width = size.width,
         .height = size.height,
 

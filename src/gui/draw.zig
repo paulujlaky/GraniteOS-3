@@ -3,6 +3,7 @@ const std = @import("std");
 const canvas = @import("canvas.zig");
 const font = @import("font.zig");
 const sketch = @import("sketch.zig");
+const style = @import("style.zig");
 const theme = @import("theme.zig");
 
 const Rect = canvas.Rect;
@@ -319,19 +320,20 @@ pub const List = struct {
     /// Draws `string`, after `which` if any, on a small dark tag, such as a hint or what a drag carries; `tagged` says where.
     pub fn tag(self: *List, which: ?font.Icon, string: []const u8, area: Rect) void {
 
-        self.quartz(area, theme.radius, theme.quartz);
+        self.quartz(area, style.px(theme.radius), theme.quartz);
 
-        var words = area.inset(tag_padding);
+        var words = area.inset(style.px(tag_padding));
+        const icon_width = style.px(tag_icon);
 
         if (which) |shown| {
 
-            self.icon(shown, tag_icon, .{ .x = words.x, .y = area.y, .width = tag_icon, .height = area.height }, theme.text);
-            words.x += tag_icon + tag_gap;
-            words.width -= tag_icon + tag_gap;
+            self.icon(shown, tag_icon * style.factor(), .{ .x = words.x, .y = area.y, .width = icon_width, .height = area.height }, theme.text);
+            words.x += icon_width + style.px(tag_gap);
+            words.width -= icon_width + style.px(tag_gap);
 
         }
 
-        self.label(string, .sans, theme.small, .{ .x = words.x, .y = area.y, .width = words.width, .height = area.height }, theme.text, .left);
+        self.label(string, .sans, theme.small * style.factor(), .{ .x = words.x, .y = area.y, .width = words.width, .height = area.height }, theme.text, .left);
 
     }
 
@@ -727,15 +729,15 @@ const tag_gap = 6;
 pub fn tagged(which: ?font.Icon, string: []const u8, at: Point, centred: bool) Rect {
 
     const face = font.face(.sans);
-    const words: i32 = @intFromFloat(@ceil(face.measure(string, theme.small / face.units)));
-    const width = words + 2 * tag_padding + @as(i32, if (which != null) tag_icon + tag_gap else 0);
+    const words: i32 = @intFromFloat(@ceil(face.measure(string, theme.small * style.factor() / face.units)));
+    const width = words + style.px(2 * tag_padding + @as(i32, if (which != null) tag_icon + tag_gap else 0));
 
     return .{
 
         .x = if (centred) at.x - @divTrunc(width, 2) else at.x,
         .y = at.y,
         .width = width,
-        .height = 26,
+        .height = style.px(26),
 
     };
 

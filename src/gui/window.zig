@@ -2,6 +2,7 @@ const canvas = @import("canvas.zig");
 const draw = @import("draw.zig");
 const image = @import("image.zig");
 const node = @import("node.zig");
+const style = @import("style.zig");
 const surface = @import("surface.zig");
 const text = @import("text.zig");
 const theme = @import("theme.zig");
@@ -34,7 +35,7 @@ pub const Options = struct {
     /// The app the window belongs to, so the dock can group its windows.
     application: ?api.abi.Image = null,
 
-    /// Content size; null fills the screen and follows it.
+    /// Content size, given at 100% for windows and multiplied by the interface scale; null fills the screen and follows it.
     width: ?i32 = null,
     height: ?i32 = null,
 
@@ -122,12 +123,16 @@ pub const Window = struct {
 
         };
 
+        style.scale = image.display.scale() catch style.scale;
+
+        const decorated = options.layer == .window;
+
         var spec = api.display.Spec.init(.{
 
             .x = options.x,
             .y = options.y,
-            .width = options.width orelse screen.width,
-            .height = options.height orelse screen.height,
+            .width = if (options.width) |width| (if (decorated) style.px(width) else width) else screen.width,
+            .height = if (options.height) |height| (if (decorated) style.px(height) else height) else screen.height,
 
         }, options.layer, options.title);
 
@@ -356,7 +361,7 @@ pub const Window = struct {
         if (self.modal) |card| {
 
             target.fill(bounds, theme.dim);
-            target.shadow(card.rect, card.style.radius, theme.spacing + 4, canvas.shade(0x000000, 110));
+            target.shadow(card.rect, card.look().radius, style.px(theme.spacing + 4), canvas.shade(0x000000, 110));
             card.paint(target, marks, background);
 
         }
@@ -429,6 +434,18 @@ pub const Window = struct {
                 return false;
 
             },
+            .notice => {
+
+                if (event.code == @intFromEnum(api.Event.Notice.scale)) {
+
+                    style.scale = image.display.scale() catch style.scale;
+                    self.refresh();
+
+                }
+
+                return false;
+
+            },
             else => return false,
 
         }
@@ -442,7 +459,7 @@ pub const Window = struct {
 
         if (event.code == 3 or event.code == 4) {
 
-            const moved = self.top().wheel(at, if (event.code == 3) -step else step) orelse return false;
+            const moved = self.top().wheel(at, if (event.code == 3) -style.px(step) else style.px(step)) orelse return false;
 
             self.invalidate(moved);
 
@@ -587,8 +604,8 @@ pub const Window = struct {
 
                 const changed = clipboard(edit, event, multiline) or switch (event.key()) {
 
-                    .up, .down => multiline and edit.vertical(face, focused.style.size, width, if (event.key() == .up) -1 else 1, shift),
-                    .page_up, .page_down => multiline and edit.vertical(face, focused.style.size, width, (focused.rows() - 1) * @as(i32, if (event.key() == .page_up) -1 else 1), shift),
+                    .up, .down => multiline and edit.vertical(face, focused.look().size, width, if (event.key() == .up) -1 else 1, shift),
+                    .page_up, .page_down => multiline and edit.vertical(face, focused.look().size, width, (focused.rows() - 1) * @as(i32, if (event.key() == .page_up) -1 else 1), shift),
                     else => edit.key(event, multiline),
 
                 };

@@ -8,6 +8,7 @@ const catalog = @import("catalog.zig");
 const clips = @import("clips.zig");
 const controls = @import("controls.zig");
 const dock = @import("dock.zig");
+const granite = @import("granite.zig");
 const launcher = @import("launcher.zig");
 const notices = @import("notices.zig");
 const pins = @import("pins.zig");
@@ -190,7 +191,7 @@ pub fn init() void {
 
     backdrop = gui.Image.init(@intCast(screen.width), @intCast(screen.height)) catch api.exit(3);
     backdrop.fit = .cover;
-    granite(&backdrop);
+    granite.paint(&backdrop, 1);
 
     backdrop.publish() catch {
 
@@ -207,7 +208,7 @@ pub fn init() void {
         .layer = .panel,
 
         .width = screen.width,
-        .height = height,
+        .height = gui.px(height),
 
         .hidden = true,
 
@@ -217,8 +218,8 @@ pub fn init() void {
 
     launcher.init(.{
 
-        .x = margin,
-        .y = height + margin,
+        .x = gui.px(margin),
+        .y = gui.px(height + margin),
 
     });
 
@@ -226,7 +227,7 @@ pub fn init() void {
     desktop_menu.init(null);
     pins.init();
     shortcuts.init();
-    notices.init(screen, height);
+    notices.init(screen, gui.px(height));
     switcher.init(screen);
     clips.init(screen);
     controls.init();
@@ -264,7 +265,7 @@ pub fn start(name: []const u8) void {
 /// Keeps the rows of the bar and dock out of maximised windows' way, and Quartz as the user chose.
 fn claim() void {
 
-    gui.display.reserve(height, dock.reach) catch {
+    gui.display.reserve(@intCast(gui.px(height)), @intCast(gui.px(dock.reach))) catch {
 
     };
 
@@ -349,6 +350,7 @@ pub fn react(input: gui.Input) bool {
 
             .windows => refresh(),
             .clipboard => clips.copied(),
+            .scale => if (window == &wallpaper) rescale(),
             _ => {
 
             },
@@ -464,15 +466,31 @@ fn place(screen: gui.Rect) void {
     bar.move(.{
 
         .width = screen.width,
-        .height = height,
+        .height = gui.px(height),
 
     });
 
     dock.place(screen);
     shortcuts.redraw();
-    notices.place(screen, height);
+    notices.place(screen, gui.px(height));
+    launcher.place(.{
+
+        .x = gui.px(margin),
+        .y = gui.px(height + margin),
+
+    });
     switcher.place(screen);
     clips.place(screen);
+
+}
+
+/// Lays the desktop out again at a new interface scale.
+fn rescale() void {
+
+    dismiss();
+    place(wallpaper.surface.list.bounds());
+    if (!bar.surface.hidden) claim();
+    wallpaper.refresh();
 
 }
 
@@ -563,7 +581,7 @@ fn settle(_: *gui.Node) void {
 
     dismiss();
     clock.selected = true;
-    controls.show(.{ .x = wallpaper.surface.list.width - margin, .y = height + margin });
+    controls.show(.{ .x = wallpaper.surface.list.width - gui.px(margin), .y = gui.px(height + margin) });
     bar.refresh();
 
 }
@@ -578,7 +596,7 @@ fn reveal(_: *gui.Node) void {
     account_menu.show(.{
 
         .x = wallpaper.surface.list.width,
-        .y = height + margin,
+        .y = gui.px(height + margin),
 
     });
 
@@ -689,7 +707,7 @@ fn replace(path: ?[]const u8) void {
 
         var fresh = gui.Image.init(@intCast(screen.width), @intCast(screen.height)) catch return;
 
-        granite(&fresh);
+        granite.paint(&fresh, 1);
         break :blk fresh;
 
     };
@@ -715,68 +733,5 @@ fn load(allocator: std.mem.Allocator, path: []const u8) !gui.Image {
     if (path.len == 0) return error.Missing;
 
     return gui.Image.decode(allocator, try files.load(allocator, path));
-
-}
-
-/// Paints dark granite: light falling from the top left over mottled stone, flecked lighter and darker.
-pub fn granite(picture: *gui.Image) void {
-
-    const pixels = picture.pixels();
-    const width: f32 = @floatFromInt(picture.width);
-    const tall: f32 = @floatFromInt(picture.height);
-
-    for (0..picture.height) |y| {
-
-        for (0..picture.width) |x| {
-
-            const fx: f32 = @floatFromInt(x);
-            const fy: f32 = @floatFromInt(y);
-            const light = 1 - (fx / width * 0.55 + fy / tall * 0.45);
-            const stone = noise(fx / 240, fy / 240) * 9 + noise(fx / 70, fy / 70) * 5;
-            const grain = noise(fx / 1.7 + 91, fy / 1.7 + 17);
-            const fleck: f32 = if (grain > 0.7) 34 * (grain - 0.7) / 0.3 else if (grain < -0.75) -6 else 0;
-            const level = std.math.clamp(19 + 22 * light * light + stone + fleck, 0, 255);
-            const value: u32 = @intFromFloat(level);
-
-            pixels[y * picture.width + x] = 0xff000000 | value << 16 | value << 8 | value;
-
-        }
-
-    }
-
-}
-
-/// Smooth value noise in -1..1 over a lattice of random heights.
-fn noise(x: f32, y: f32) f32 {
-
-    const left = @floor(x);
-    const top = @floor(y);
-    const u = smooth(x - left);
-    const v = smooth(y - top);
-    const column: i32 = @intFromFloat(left);
-    const row: i32 = @intFromFloat(top);
-
-    const upper = lattice(column, row) + (lattice(column + 1, row) - lattice(column, row)) * u;
-    const lower = lattice(column, row + 1) + (lattice(column + 1, row + 1) - lattice(column, row + 1)) * u;
-
-    return upper + (lower - upper) * v;
-
-}
-
-fn smooth(t: f32) f32 {
-
-    return t * t * (3 - 2 * t);
-
-}
-
-fn lattice(x: i32, y: i32) f32 {
-
-    var hash = @as(u32, @bitCast(x)) *% 0x9e3779b1 ^ @as(u32, @bitCast(y)) *% 0x85ebca77;
-
-    hash = (hash ^ (hash >> 15)) *% 0x2c1b3c6d;
-    hash = (hash ^ (hash >> 12)) *% 0x297a2d39;
-    hash ^= hash >> 15;
-
-    return @as(f32, @floatFromInt(hash & 0xffff)) / 32767.5 - 1;
 
 }

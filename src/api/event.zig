@@ -45,6 +45,9 @@ pub const Event = packed struct(u64) {
 
         /// An app copied something; only the session hears it, to keep a history.
         clipboard,
+
+        /// The interface scale changed; every surface hears it, to lay itself out again.
+        scale,
         _,
 
     };

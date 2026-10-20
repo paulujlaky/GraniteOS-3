@@ -275,6 +275,22 @@ pub const Display = struct {
 
     }
 
+    /// The interface scale in percent, from 100 to 200.
+    pub fn scale(self: *Display) api.ServiceError!i32 {
+
+        const value: i32 = @intCast((try self.request(.info, 0, &.{})) >> 56);
+
+        return if (value == 0) 100 else value;
+
+    }
+
+    /// Sets the interface scale to `percent`, a step of 25 from 100 to 200, and remembers it; every surface hears of it.
+    pub fn rescale(self: *Display, percent: u8) api.ServiceError!void {
+
+        _ = try self.request(.scale, percent, &.{});
+
+    }
+
     /// Switches the screen to `width` by `height` and remembers it; administrators only.
     pub fn mode(self: *Display, width: u16, height: u16) api.ServiceError!void {
 

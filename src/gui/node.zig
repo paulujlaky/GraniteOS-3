@@ -190,10 +190,17 @@ pub const Node = struct {
 
     }
 
+    /// Its style at the interface scale, as layout and painting use it.
+    pub fn look(self: *const Node) Style {
+
+        return self.style.scaled();
+
+    }
+
     /// The area inside the node's padding.
     pub fn inner(self: *const Node) Rect {
 
-        return self.style.padding.shrink(self.rect);
+        return self.style.padding.scaled().shrink(self.rect);
 
     }
 
@@ -202,7 +209,8 @@ pub const Node = struct {
 
         if (self.hidden) return .{};
 
-        const box = &self.style;
+        const sized = self.look();
+        const box = &sized;
         var natural = Size{};
 
         switch (self.content) {
@@ -297,7 +305,8 @@ pub const Node = struct {
 
         };
 
-        const box = &self.style;
+        const sized = self.look();
+        const box = &sized;
         const inner_area = box.padding.shrink(target);
         const row = box.direction == .row;
 
@@ -398,7 +407,8 @@ pub const Node = struct {
         if (!self.shown()) return;
         if (target.limit) |limit| if (limit.intersect(self.rect) == null) return;
 
-        const box = &self.style;
+        const sized = self.look();
+        const box = &sized;
 
         const colors = box.paint(.{
 
@@ -535,7 +545,7 @@ pub const Node = struct {
             },
             .area => |edit| {
 
-                const height = text.leading(self.typeface(), self.style.size);
+                const height = text.leading(self.typeface(), self.look().size);
                 const count: i32 = @divTrunc(delta, height);
                 const top = @max(@as(i64, @intCast(edit.top)) + if (count == 0) std.math.sign(delta) else count, 0);
 
@@ -622,20 +632,20 @@ pub const Node = struct {
 
             if (edit.secret) return @min(@as(usize, @intCast(@max(@divTrunc(point.x - area.x + pitch / 2, pitch), 0))), edit.length);
 
-            return edit.locate(self.typeface(), self.style.size, area.width, x, null);
+            return edit.locate(self.typeface(), self.look().size, area.width, x, null);
 
         }
 
-        const row = edit.top + @as(usize, @intCast(@max(@divTrunc(point.y - area.y, text.leading(self.typeface(), self.style.size)), 0)));
+        const row = edit.top + @as(usize, @intCast(@max(@divTrunc(point.y - area.y, text.leading(self.typeface(), self.look().size)), 0)));
 
-        return edit.locate(self.typeface(), self.style.size, area.width, x, row);
+        return edit.locate(self.typeface(), self.look().size, area.width, x, row);
 
     }
 
     /// Wrapped lines that fit in a text area.
     pub fn rows(self: *const Node) i32 {
 
-        return @max(@divTrunc(self.inner().height, text.leading(self.typeface(), self.style.size)), 1);
+        return @max(@divTrunc(self.inner().height, text.leading(self.typeface(), self.look().size)), 1);
 
     }
 
@@ -652,24 +662,25 @@ pub const Node = struct {
         target.round(if (row) .{
 
             .x = self.rect.x + start,
-            .y = self.rect.bottom() - thumb - 2,
+            .y = self.rect.bottom() - style.px(thumb + 2),
             .width = length,
-            .height = thumb,
+            .height = style.px(thumb),
 
         } else .{
 
-            .x = self.rect.right() - thumb - 2,
+            .x = self.rect.right() - style.px(thumb + 2),
             .y = self.rect.y + start,
-            .width = thumb,
+            .width = style.px(thumb),
             .height = length,
 
-        }, thumb / 2, theme.faint);
+        }, @divTrunc(style.px(thumb), 2), theme.faint);
 
     }
 
     fn line(self: *const Node, edit: *Text, target: *List, area: Rect, color: u32, focused: bool) void {
 
-        const box = &self.style;
+        const sized = self.look();
+        const box = &sized;
         const face = self.typeface();
         const scale = box.size / face.units;
         const height = text.leading(face, box.size);
@@ -742,7 +753,8 @@ pub const Node = struct {
 
     fn lines(self: *const Node, edit: *Text, target: *List, area: Rect, color: u32, focused: bool) void {
 
-        const box = &self.style;
+        const sized = self.look();
+        const box = &sized;
         const face = self.typeface();
         const scale = box.size / face.units;
         const height = text.leading(face, box.size);

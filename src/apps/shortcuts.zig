@@ -17,7 +17,6 @@ const theme = gui.theme;
 const wide = 88;
 const tall = 84;
 const inset = 8;
-const top = desktop.height + inset;
 
 pub const Cell = struct {
 
@@ -105,6 +104,13 @@ pub fn vacant(from: Cell) ?Cell {
 
 }
 
+/// How far the grid keeps below the top of the screen, clear of the bar.
+fn top() i32 {
+
+    return gui.px(desktop.height + inset);
+
+}
+
 /// How many columns and rows of cells fit on the screen, clear of the bar and the dock.
 fn grid() Cell {
 
@@ -112,8 +118,8 @@ fn grid() Cell {
 
     return .{
 
-        .column = @intCast(std.math.clamp(@divTrunc(screen.width - 2 * inset, wide), 1, 255)),
-        .row = @intCast(std.math.clamp(@divTrunc(screen.height - top - dock.reach, tall), 1, 255)),
+        .column = @intCast(std.math.clamp(@divTrunc(screen.width - 2 * gui.px(inset), gui.px(wide)), 1, 255)),
+        .row = @intCast(std.math.clamp(@divTrunc(screen.height - top() - gui.px(dock.reach), gui.px(tall)), 1, 255)),
 
     };
 
@@ -138,10 +144,10 @@ fn spot(cell: Cell) gui.Rect {
 
     return .{
 
-        .x = inset + @as(i32, @min(cell.column, fits.column - 1)) * wide,
-        .y = top + @as(i32, @min(cell.row, fits.row - 1)) * tall,
-        .width = wide,
-        .height = tall,
+        .x = gui.px(inset) + @as(i32, @min(cell.column, fits.column - 1)) * gui.px(wide),
+        .y = top() + @as(i32, @min(cell.row, fits.row - 1)) * gui.px(tall),
+        .width = gui.px(wide),
+        .height = gui.px(tall),
 
     };
 
@@ -157,7 +163,7 @@ fn area(index: usize) gui.Rect {
         .column = item.column,
         .row = item.row,
 
-    }).inset(4);
+    }).inset(gui.px(4));
 
     const held = press orelse return at;
 
@@ -318,8 +324,8 @@ fn drop(offset: gui.Point) void {
 
         wanted[index] = .{
 
-            .column = @intCast(std.math.clamp(@divFloor(at.x - inset + wide / 2, wide), 0, fits.column - 1)),
-            .row = @intCast(std.math.clamp(@divFloor(at.y - top + tall / 2, tall), 0, fits.row - 1)),
+            .column = @intCast(std.math.clamp(@divFloor(at.x - gui.px(inset) + @divTrunc(gui.px(wide), 2), gui.px(wide)), 0, fits.column - 1)),
+            .row = @intCast(std.math.clamp(@divFloor(at.y - top() + @divTrunc(gui.px(tall), 2), gui.px(tall)), 0, fits.row - 1)),
 
         };
 
@@ -357,30 +363,30 @@ fn paint(_: *gui.Node, target: *gui.List) void {
         const symbol = gui.Rect{
 
             .x = box.x,
-            .y = box.y + 8,
+            .y = box.y + gui.px(8),
             .width = box.width,
-            .height = 40,
+            .height = gui.px(40),
 
         };
 
         const words = gui.Rect{
 
-            .x = box.x + 4,
-            .y = box.y + 50,
-            .width = box.width - 8,
-            .height = 20,
+            .x = box.x + gui.px(4),
+            .y = box.y + gui.px(50),
+            .width = box.width - gui.px(8),
+            .height = gui.px(20),
 
         };
 
-        const shown = gui.draw.shorten(name, .sans, theme.small, words.width, &bytes);
+        const shown = gui.draw.shorten(name, .sans, theme.small * gui.style.factor(), words.width, &bytes);
 
-        if (item.selected) target.round(box, theme.radius, gui.shade(0xffffff, 36));
+        if (item.selected) target.round(box, gui.px(theme.radius), gui.shade(0xffffff, 36));
 
         // A shadow keeps both readable over light wallpapers.
         for ([_]u32{ gui.shade(0x000000, 160), theme.text }, [_]i32{ 1, 0 }) |color, drop_by| {
 
-            target.icon(catalog.badge(item.target()), 30, gui.draw.move(symbol, .{ .y = drop_by }), color);
-            target.label(shown, .sans, theme.small, gui.draw.move(words, .{ .y = drop_by }), color, .center);
+            target.icon(catalog.badge(item.target()), 30 * gui.style.factor(), gui.draw.move(symbol, .{ .y = drop_by }), color);
+            target.label(shown, .sans, theme.small * gui.style.factor(), gui.draw.move(words, .{ .y = drop_by }), color, .center);
 
         }
 
