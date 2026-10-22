@@ -20,8 +20,8 @@ var due: u64 = 0;
 var controller: ?pci.Bar = null;
 var host: ?pci.Bar = null;
 
-/// The Ethernet controller: its PCI function, vendor and device ids, and registers.
-const Nic = struct {
+/// A device a driver service runs through BAR 0 alone: its PCI function, vendor and device ids, and registers.
+const Function = struct {
 
     at: u32,
     device: u32,
@@ -29,10 +29,12 @@ const Nic = struct {
 
 };
 
-var nic: ?Nic = null;
+var nic: ?Function = null;
+var sound: ?Function = null;
 
-/// The message-signalled line the Ethernet controller raises.
+/// The message-signalled lines the Ethernet and HD Audio controllers raise.
 const ethernet_line = 16;
+const audio_line = 17;
 
 /// The display's graphics device: its PCI vendor and device ids, and the BARs it needs.
 const Graphics = struct {
@@ -327,30 +329,8 @@ pub fn spawn(owner: *process.Process, image: abi.Image, argument: u64, identity:
             task.context.frame.rcx = host.?.size;
 
         },
-        .net => {
-
-            try task.configure(.service, &.{
-
-                .ipc, .time, .memory, .mmio, .dma, .diagnostics
-
-            });
-
-            const registers = nic.?.registers;
-
-            try task.grant(.mmio, registers.base, registers.size);
-            try task.grant(.log, 0, 1);
-
-            task.environment.device = nic.?.device;
-            task.environment.bars[0] = .{
-
-                .base = registers.base,
-                .size = registers.size,
-
-            };
-
-            task.environment.signal = message(task, nic.?.at, ethernet_line);
-
-        },
+        .net => try drive(task, nic.?, ethernet_line),
+        .audio => try drive(task, sound.?, audio_line),
         .metrics => {
 
             try task.configure(.service, &.{
@@ -406,6 +386,33 @@ fn probe(image: abi.Image) !void {
 
     if (image == .net and nic == null) nic = ethernet();
     if (image == .net and nic == null) return error.NoDevice;
+
+    if (image == .audio and sound == null) sound = audio();
+    if (image == .audio and sound == null) return error.NoDevice;
+
+}
+
+/// Grants a driver service `function`'s registers and DMA, routing its interrupts to it as `line`.
+fn drive(task: *process.Process, function: Function, line: u5) !void {
+
+    try task.configure(.service, &.{
+
+        .ipc, .time, .memory, .mmio, .dma, .diagnostics
+
+    });
+
+    try task.grant(.mmio, function.registers.base, function.registers.size);
+    try task.grant(.log, 0, 1);
+
+    task.environment.device = function.device;
+    task.environment.bars[0] = .{
+
+        .base = function.registers.base,
+        .size = function.registers.size,
+
+    };
+
+    task.environment.signal = message(task, function.at, line);
 
 }
 
@@ -465,12 +472,40 @@ fn svga() ?Graphics {
 }
 
 /// An Intel Ethernet controller of the e1000e family, such as VMware's 82574L or the I219-V: its registers are BAR 0.
-fn ethernet() ?Nic {
+fn ethernet() ?Function {
 
     const at = pci.find(.{ .class = 0x020000 }) orelse return null;
     const device = pci.id(at);
 
     if (device & 0xffff != 0x8086) return null;
+
+    return .{
+
+        .at = at,
+        .device = device,
+        .registers = pci.bar(at, 0) orelse return null,
+
+    };
+
+}
+
+/// Intel PCH audio controllers that only snoop the processor's caches when told to: Sunrise Point, Kaby Point, and Cannon Point.
+const unsnooped = [_]u16{ 0xa170, 0x9d70, 0x9d71, 0xa2f0, 0xa348, 0x9dc8 };
+
+/// An HD Audio controller, such as VMware's or the Coffee Lake PCH's: a multimedia audio device whose registers are BAR 0.
+fn audio() ?Function {
+
+    const at = pci.find(.{ .family = 0x0403 }) orelse return null;
+    const device = pci.id(at);
+
+    if (device & 0xffff == 0x8086) {
+
+        // Traffic class 0, as some codecs crackle otherwise.
+        pci.modify(at, 0x44, 0x7, 0);
+
+        if (std.mem.indexOfScalar(u16, &unsnooped, @intCast(device >> 16)) != null) pci.modify(at, 0x78, 1 << 11, 0);
+
+    }
 
     return .{
 

@@ -12,6 +12,9 @@ const wire = @import("wire.zig");
 const tcp = @import("tcp.zig");
 const dns = @import("dns.zig");
 const dhcp = @import("dhcp.zig");
+const mixer = @import("mixer.zig");
+const chime = @import("chime.zig");
+const codec = @import("codec.zig");
 
 test "GPU quads cover exactly their pixels and sample texel centres under either pixel-centre convention" {
 
@@ -549,6 +552,11 @@ test "HID descriptors find boot keyboards and pointer reports, and keys translat
     try std.testing.expectEqual(0x1e, hid.translate(0x04));
     try std.testing.expectEqual(0x148, hid.translate(0x52));
 
+    // Mute and the volume keys, as PS/2 keyboards send them.
+    try std.testing.expectEqual(0x120, hid.translate(0x7f));
+    try std.testing.expectEqual(0x130, hid.translate(0x80));
+    try std.testing.expectEqual(0x12e, hid.translate(0x81));
+
 }
 
 /// Turns what a connection wants sent into the segment its peer receives.
@@ -718,5 +726,353 @@ test "DHCP builds a discover and reads an offer's lease" {
     try std.testing.expectEqual(1800, offer.lease);
     try std.testing.expectEqual(900, offer.renew);
     try std.testing.expect(dhcp.parse(bytes[0..length], 0xabce, mac) == null);
+
+}
+
+test "mixer passes device-rate streams through exactly across the ring's wrap and stops when it runs dry" {
+
+    const samples = [_]i16{ 100, -100, 200, -200, 300, -300, 400, -400 };
+
+    var ring = mixer.Ring(i16){
+
+        .samples = &samples,
+        .channels = 2,
+        .capacity = 4,
+        .taken = 2,
+        .written = 7,
+
+    };
+
+    var resampler = mixer.Resampler.init(mixer.rate);
+    var out = [_]mixer.Frame{mixer.silence} ** 8;
+
+    resampler.gain = 1;
+
+    // Frames come out two behind those read, as the window holds two ahead, until the ring runs dry.
+    try std.testing.expectEqual(5, resampler.mix(i16, &ring, &out, 1));
+    try std.testing.expectEqual(7, ring.taken);
+
+    const expected = [_]i16{ 0, 0, 300, 400, 100 };
+
+    for (expected, out[0..5]) |left, frame| {
+
+        try std.testing.expectEqual(@as(f32, @floatFromInt(left)) / 32768, frame[0]);
+        try std.testing.expectEqual(-frame[0], frame[1]);
+
+    }
+
+    try std.testing.expectEqual(mixer.silence, out[5]);
+
+}
+
+test "mixer resamples 44.1 kHz mono to the device rate keeping a tone's pitch and level" {
+
+    const source = 44100;
+    var samples: [source / 10]f32 = undefined;
+
+    for (&samples, 0..) |*sample, index| sample.* = 0.5 * @sin(std.math.tau * 1000 * @as(f32, @floatFromInt(index)) / source);
+
+    var ring = mixer.Ring(f32){
+
+        .samples = &samples,
+        .channels = 1,
+        .capacity = samples.len,
+        .taken = 0,
+        .written = samples.len,
+
+    };
+
+    var resampler = mixer.Resampler.init(source);
+    var out = [_]mixer.Frame{mixer.silence} ** (mixer.rate / 10 + 64);
+
+    resampler.gain = 1;
+
+    const produced = resampler.mix(f32, &ring, &out, 1);
+
+    // A tenth of a second at either rate, give or take the rounding of the step.
+    try std.testing.expect(produced >= mixer.rate / 10 - 1 and produced <= mixer.rate / 10 + 1);
+    try std.testing.expectEqual(samples.len, ring.taken);
+    try std.testing.expect(source - resampler.span(mixer.rate) <= 1);
+
+    var crossings: usize = 0;
+    var peak: f32 = 0;
+
+    for (out[8..produced], out[9 .. produced + 1]) |before, after| {
+
+        if ((before[0] < 0) != (after[0] < 0)) crossings += 1;
+        peak = @max(peak, @abs(after[0]));
+        try std.testing.expectEqual(after[0], after[1]);
+
+    }
+
+    // A thousand cycles a second cross zero about two hundred times in a tenth of a second.
+    try std.testing.expect(crossings >= 196 and crossings <= 201);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), peak, 0.01);
+
+}
+
+test "mixer glides gains, clips the sum, and holds bad floats to full scale" {
+
+    const samples = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1, std.math.nan(f32), std.math.inf(f32) };
+
+    var ring = mixer.Ring(f32){
+
+        .samples = &samples,
+        .channels = 1,
+        .capacity = samples.len,
+        .taken = 0,
+        .written = samples.len,
+
+    };
+
+    var resampler = mixer.Resampler.init(mixer.rate);
+    var out = [_]mixer.Frame{mixer.silence} ** 6;
+
+    resampler.window = .{@as(mixer.Frame, @splat(1))} ** 4;
+    _ = resampler.mix(f32, &ring, &out, 1);
+
+    // From silence to full gain in even steps over the block.
+    for (out, 0..) |frame, index| try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(index)) / 6, frame[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), resampler.gain, 1e-6);
+
+    var loud = [_]mixer.Frame{ .{ 2, -2 }, .{ 0.5, -0.25 }, .{ std.math.nan(f32), 0 } };
+    var pcm: [6]i16 = undefined;
+
+    mixer.quantize(&loud, &pcm);
+    try std.testing.expectEqualSlices(i16, &.{ 32767, -32767, 16384, -8192, -32767, 0 }, &pcm);
+
+    // The not-a-number and the infinity reach the window as full scale either way.
+    var rest = [_]mixer.Frame{mixer.silence} ** 4;
+
+    try std.testing.expectEqual(4, resampler.mix(f32, &ring, &rest, 1));
+    try std.testing.expectEqual(@as(mixer.Frame, @splat(-1)), resampler.window[2]);
+    try std.testing.expectEqual(@as(mixer.Frame, @splat(1)), resampler.window[3]);
+
+    try std.testing.expectEqual(0, mixer.loudness(0));
+    try std.testing.expectEqual(1, mixer.loudness(100));
+    try std.testing.expectEqual(1, mixer.loudness(200));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.125), mixer.loudness(50), 1e-6);
+
+}
+
+test "mixer cursor counts the device's frames across its ring's wrap" {
+
+    var cursor = mixer.Cursor{
+
+        .size = 4096,
+
+    };
+
+    try std.testing.expectEqual(0, cursor.advance(0));
+    try std.testing.expectEqual(512, cursor.advance(2048));
+    try std.testing.expectEqual(1024, cursor.advance(4096));
+    try std.testing.expectEqual(1280, cursor.advance(1024));
+    try std.testing.expectEqual(1281, cursor.advance(1030));
+    try std.testing.expectEqual(1282, cursor.advance(1032));
+
+}
+
+test "every chime stays within full scale, swells without a click, and ends in silence" {
+
+    for (chime.tunes) |tune| {
+
+        var voice = chime.Voice{
+
+            .tune = tune,
+
+        };
+
+        const length: usize = @intFromFloat(@ceil(chime.duration(tune) * mixer.rate));
+        var out = [_]mixer.Frame{mixer.silence} ** 512;
+        var played: usize = 0;
+        var peak: f32 = 0;
+
+        try std.testing.expect(length > 0);
+
+        while (!voice.done()) {
+
+            @memset(&out, mixer.silence);
+            voice.mix(&out, 1);
+
+            for (out, played..) |frame, index| {
+
+                try std.testing.expect(std.math.isFinite(frame[0]) and @abs(frame[0]) < 1);
+                if (index == 0) try std.testing.expectEqual(0, frame[0]);
+                if (index >= length) try std.testing.expect(@abs(frame[0]) < 1e-4);
+                peak = @max(peak, @abs(frame[0]));
+
+            }
+
+            played += out.len;
+
+        }
+
+        try std.testing.expect(peak > 0.05);
+        try std.testing.expect(played >= length and played < length + out.len);
+
+    }
+
+}
+
+/// A codec of nine widgets, as `Fake.nodes` lists them, that records every verb setting something.
+const Fake = struct {
+
+    const Node = struct {
+
+        parameters: []const struct { codec.Parameter, u32 } = &.{},
+        configuration: u32 = 0,
+        connections: []const u32 = &.{},
+
+    };
+
+    const amp = 1 << 31 | 0x05 << 16 | 0x57 << 8 | 0x40;
+    const input_amp = 1 << 31 | 0x1f << 8 | 0x17;
+
+    const nodes = [_]Node{
+
+        // The root, then the audio function group.
+        .{ .parameters = &.{ .{ .vendor, 0x10ec0892 }, .{ .nodes, 1 << 16 | 1 } } },
+        .{ .parameters = &.{ .{ .group, 1 }, .{ .nodes, 2 << 16 | 8 }, .{ .output_amp, amp }, .{ .input_amp, input_amp } } },
+
+        // An analog converter, then a digital one.
+        .{ .parameters = &.{.{ .widget, 0x00000005 }} },
+        .{ .parameters = &.{.{ .widget, 0x00000201 }} },
+
+        // A mixer of a range of nodes, 2 to 7.
+        .{ .parameters = &.{ .{ .widget, 0x00200103 }, .{ .connections, 2 } }, .connections = &.{0x8702} },
+
+        // Headphones on a jack, through the mixer.
+        .{ .parameters = &.{ .{ .widget, 0x00400105 }, .{ .pin, 0x18 }, .{ .connections, 1 } }, .configuration = 0x02211020, .connections = &.{0x04} },
+
+        // A built-in speaker that needs its amplifier enabled, listing the digital converter first in long form.
+        .{ .parameters = &.{ .{ .widget, 0x00400101 }, .{ .pin, 0x10010 }, .{ .connections, 0x82 } }, .configuration = 0x90170110, .connections = &.{0x0002_0003} },
+
+        // A microphone, line out wired to nothing, and a digital output: none is driven.
+        .{ .parameters = &.{ .{ .widget, 0x00400001 }, .{ .pin, 0x20 } }, .configuration = 0x01a19030 },
+        .{ .parameters = &.{ .{ .widget, 0x00400101 }, .{ .pin, 0x10 }, .{ .connections, 1 } }, .configuration = 0x411111f0, .connections = &.{0x02} },
+        .{ .parameters = &.{ .{ .widget, 0x00400301 }, .{ .pin, 0x10 }, .{ .connections, 1 } }, .configuration = 0x01441150, .connections = &.{0x03} },
+
+    };
+
+    /// Each verb that set something: its node, verb, and payload.
+    sets: [64][3]u32 = undefined,
+    count: usize = 0,
+
+    fn send(context: *anyopaque, command: u32) ?u32 {
+
+        const self: *Fake = @ptrCast(@alignCast(context));
+        const node = &nodes[command >> 20 & 0xff];
+        const verb = command >> 8 & 0xfff;
+        const payload = command & 0xff;
+
+        switch (verb) {
+
+            0xf00 => {
+
+                for (node.parameters) |entry| {
+
+                    if (@intFromEnum(entry[0]) == payload) return entry[1];
+
+                }
+
+                return 0;
+
+            },
+            0xf02 => return node.connections[payload / 4],
+            0xf1c => return node.configuration,
+            else => {
+
+                // 4-bit verbs carry a 16-bit payload instead.
+                const short = verb >> 8 != 0x7;
+
+                self.sets[self.count] = if (short) .{ command >> 20 & 0xff, command >> 16 & 0xf, command & 0xffff } else .{ command >> 20 & 0xff, verb, payload };
+                self.count += 1;
+
+                return 0;
+
+            },
+
+        }
+
+    }
+
+    fn set(self: *const Fake, node: u32, verb: u32) ?u32 {
+
+        for (self.sets[0..self.count]) |entry| {
+
+            if (entry[0] == node and entry[1] == verb) return entry[2];
+
+        }
+
+        return null;
+
+    }
+
+    fn amps(self: *const Fake, node: u32, out: []u32) []u32 {
+
+        var count: usize = 0;
+
+        for (self.sets[0..self.count]) |entry| {
+
+            if (entry[0] != node or entry[1] != 0x3) continue;
+
+            out[count] = entry[2];
+            count += 1;
+
+        }
+
+        return out[0..count];
+
+    }
+
+};
+
+test "codec routes each analog output pin to a converter and opens its path at unity gain" {
+
+    var fake = Fake{};
+    var chip = codec.Codec{};
+
+    const link = codec.Link{
+
+        .context = &fake,
+        .send = Fake.send,
+        .address = 0,
+
+    };
+
+    try std.testing.expect(chip.probe(link));
+    try std.testing.expectEqual(0x10ec0892, chip.vendor);
+    try std.testing.expectEqual(1, chip.group);
+    try std.testing.expectEqualSlices(u8, &.{ 2, 3, 4, 5, 6, 7 }, chip.find(4).?.inputs[0..chip.find(4).?.count]);
+    try std.testing.expectEqualSlices(u8, &.{ 3, 2 }, chip.find(6).?.inputs[0..chip.find(6).?.count]);
+
+    fake.count = 0;
+    chip.route(link);
+
+    try std.testing.expectEqual(2, chip.outputs);
+    try std.testing.expectEqualSlices(u8, &.{2}, chip.converters[0..chip.converter_count]);
+
+    // Headphones get headphone drive; the speaker skips the digital converter and wakes its amplifier.
+    try std.testing.expectEqual(0xc0, fake.set(5, 0x707));
+    try std.testing.expectEqual(null, fake.set(5, 0x70c));
+    try std.testing.expectEqual(0x40, fake.set(6, 0x707));
+    try std.testing.expectEqual(2, fake.set(6, 0x70c));
+    try std.testing.expectEqual(1, fake.set(6, 0x701));
+
+    for ([_]u32{ 7, 8, 9 }) |idle| try std.testing.expectEqual(null, fake.set(idle, 0x707));
+
+    // The mixer hears only the converter, at 0 dB; the converter and headphones play at 0 dB too.
+    var found: [16]u32 = undefined;
+
+    try std.testing.expectEqualSlices(u32, &.{ 0x7017, 0x7180, 0x7280, 0x7380, 0x7480, 0x7580 }, fake.amps(4, &found));
+    try std.testing.expectEqualSlices(u32, &.{0xb040}, fake.amps(5, &found));
+    try std.testing.expectEqual(0xb040, fake.amps(2, &found)[0]);
+
+    fake.count = 0;
+    chip.start(link, 1, 0x0011);
+
+    try std.testing.expectEqual(0x10, fake.set(2, 0x706));
+    try std.testing.expectEqual(0x0011, fake.set(2, 0x2));
+    try std.testing.expectEqual(2, fake.count);
 
 }

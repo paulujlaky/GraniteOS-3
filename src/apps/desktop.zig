@@ -455,6 +455,7 @@ fn notify(request: api.Request) u64 {
     const split = std.mem.indexOfScalar(u8, message, 0) orelse message.len;
 
     notices.post(.bell, message[0..split], message[@min(split + 1, message.len)..], null);
+    api.audio.cue(.notice);
 
     return 0;
 

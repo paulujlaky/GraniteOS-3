@@ -131,6 +131,17 @@ const groups = [_]Group{
         },
 
     },
+    .{
+
+        .title = "sound",
+        .commands = &.{
+
+            command("sound [PERCENT|mute|unmute]", "Show the output, or set the volume", sound),
+            command("tone [HERTZ]", "Play a two-second test tone", tone),
+
+        },
+
+    },
 
 };
 
@@ -726,7 +737,7 @@ fn permissions(_: []const u8) Error!void {
 
 fn services(_: []const u8) Error!void {
 
-    for ([_]api.abi.Image{ .serial, .helper, .storage, .files, .accounts, .install, .input, .display, .shell }) |image| {
+    for ([_]api.abi.Image{ .serial, .helper, .storage, .files, .accounts, .install, .input, .display, .audio, .shell }) |image| {
 
         const peer = api.lookup(terminal.supervisor, image) catch {
 
@@ -1089,6 +1100,72 @@ fn get(argument: []const u8) Error!void {
 
     files.save(api.pages, path, body.written()) catch |err| return report("get", err);
     try terminal.print("Saved {d} bytes to {s}\n", .{ body.written().len, path });
+
+}
+
+fn sound(argument: []const u8) Error!void {
+
+    if (std.mem.eql(u8, argument, "mute") or std.mem.eql(u8, argument, "unmute")) {
+
+        return api.audio.mute(argument[0] == 'm') catch |err| report("sound", err);
+
+    }
+
+    if (argument.len != 0) {
+
+        const percent = std.fmt.parseInt(u8, argument, 10) catch return error.Usage;
+
+        if (percent > 100) return error.Usage;
+
+        return api.audio.volume(percent) catch |err| report("sound", err);
+
+    }
+
+    const state = api.audio.status() catch |err| return report("sound", err);
+    var name: [32]u8 = undefined;
+
+    try terminal.print("{s}, {s}, {d} outputs\n", .{ state.adapter(), state.chip(&name), state.outputs });
+    try terminal.print("Volume {d}%{s}, system sounds {s}\n", .{ state.volume, if (state.muted) " (muted)" else "", if (state.sounds) "on" else "off" });
+    try terminal.print("{d} streams, {d} ms latency, {d} underruns\n", .{ state.streams, state.latency * 1000 / state.rate, state.underruns });
+
+}
+
+/// Plays a sine at 44.1 kHz, which the audio service resamples, fading in and out so it starts and ends without a click.
+fn tone(argument: []const u8) Error!void {
+
+    const rate = 44100;
+    const hertz: f32 = if (argument.len == 0) 440 else std.fmt.parseFloat(f32, argument) catch return error.Usage;
+
+    if (hertz < 20 or hertz > 20000) return error.Usage;
+
+    var stream = api.audio.Stream.open(.{ .rate = rate, .channels = 1 }, rate / 4) catch |err| return report("tone", err);
+
+    defer stream.close();
+
+    var chunk: [1024]i16 = undefined;
+    var frame: usize = 0;
+    const total = 2 * rate;
+
+    while (frame < total) {
+
+        const count = @min(chunk.len, total - frame);
+
+        for (chunk[0..count], frame..) |*sample, index| {
+
+            const t = @as(f32, @floatFromInt(index)) / rate;
+            const edge = @min(@min(t, 2 - t) / 0.02, 1);
+
+            sample.* = @intFromFloat(edge * 8000 * @sin(std.math.tau * hertz * t));
+
+        }
+
+        stream.send(i16, chunk[0..count]) catch |err| return report("tone", err);
+        frame += count;
+
+    }
+
+    stream.wait(true) catch |err| return report("tone", err);
+    try terminal.print("Played {d} frames, {d} underruns\n", .{ stream.position(), stream.header.underruns });
 
 }
 

@@ -1,5 +1,5 @@
 //! Quick settings under the bar's date and time: the time and date, the weather where Weather last looked, a month calendar
-//! to page through, and a switch for each setting, starting with the network.
+//! to page through, the volume, and a switch for each setting, starting with the network. The volume keys work here too.
 
 const std = @import("std");
 
@@ -266,6 +266,33 @@ var grid = gui.box(.{
 var calendar_parts = [_]*gui.Node{ &month_row, &head_row, &grid };
 var calendar = gui.box(card, &calendar_parts);
 
+// The volume, beside a button that mutes it; hidden without an audio device.
+var speaker = gui.tool(.volume_high, &silence);
+var level = gui.Slider{ .changed = &slide };
+var level_node: gui.Node = undefined;
+var percent_bytes: [8]u8 = undefined;
+
+var percent = gui.label("", theme.caption.with(.{
+
+    .width = 40,
+    .text_align = .right,
+
+}));
+
+var sound_parts = [_]*gui.Node{ &speaker, &level_node, &percent };
+
+var sound = gui.box(card.with(.{
+
+    .padding = gui.Edges.axes(6, 10),
+    .direction = .row,
+    .gap = 8,
+    .items = .center,
+
+}), &sound_parts);
+
+/// Percent the volume keys move the volume by.
+const step = 5;
+
 // The switches.
 var icons: [tiles.len]gui.Node = undefined;
 var titles: [tiles.len]gui.Node = undefined;
@@ -288,7 +315,7 @@ var switches = gui.box(card.with(.{
 
 }), &row_list);
 
-var root_parts = [_]*gui.Node{ &header, &weather, &calendar, &switches };
+var root_parts = [_]*gui.Node{ &header, &weather, &calendar, &sound, &switches };
 
 var root = gui.box(theme.popup.with(.{
 
@@ -313,6 +340,12 @@ pub fn init() void {
 
     month.action = &current;
     weather.action = &look;
+
+    level_node = level.node(.{
+
+        .grow = 1,
+
+    });
 
     for (&heads, 0..) |*head, index| {
 
@@ -553,6 +586,7 @@ fn refresh() void {
 
     fill();
     weather.hidden = brief == null;
+    hear(api.audio.status() catch null);
 
     if (brief) |*known| {
 
@@ -680,6 +714,77 @@ fn look(_: *gui.Node) void {
     }
 
     desktop.start_app(.weather, desktop.home);
+
+}
+
+/// Shows the volume as `state` has it, or hides it without audio.
+fn hear(state: ?api.audio.Status) void {
+
+    sound.hidden = state == null;
+
+    const known = state orelse return;
+    const loudness: u8 = if (known.muted) 0 else known.volume;
+
+    level.value = @as(f32, @floatFromInt(known.volume)) / 100;
+    percent.content.label = if (known.muted) "Muted" else std.fmt.bufPrint(&percent_bytes, "{d}%", .{known.volume}) catch "";
+
+    const icon: gui.Icon = if (loudness == 0) .mute else if (loudness < 34) .volume else if (loudness < 67) .volume_low else .volume_high;
+
+    speaker.content.label = icon.text();
+
+}
+
+/// Takes the volume keys, whichever window has the keyboard, playing a tick at the new volume; true when `event` was one.
+pub fn press(event: api.Event) bool {
+
+    if (event.kind != .key or !event.key().global()) return false;
+    if (!event.pressed) return true;
+
+    const state = api.audio.status() catch return true;
+
+    switch (event.key()) {
+
+        .mute => api.audio.mute(!state.muted) catch {
+
+        },
+        .volume_down => api.audio.volume(state.volume -| step) catch {
+
+        },
+        else => api.audio.volume(@min(state.volume + step, 100)) catch {
+
+        },
+
+    }
+
+    api.audio.cue(.level);
+    if (shown()) refresh();
+
+    return true;
+
+}
+
+fn slide(slider: *gui.Slider, done: bool) void {
+
+    api.audio.volume(@intFromFloat(@round(slider.value * 100))) catch {
+
+    };
+
+    if (done) api.audio.cue(.level);
+    hear(api.audio.status() catch null);
+    window.refresh();
+
+}
+
+fn silence(_: *gui.Node) void {
+
+    const state = api.audio.status() catch return;
+
+    api.audio.mute(!state.muted) catch {
+
+    };
+
+    hear(api.audio.status() catch null);
+    window.refresh();
 
 }
 

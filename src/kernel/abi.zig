@@ -92,13 +92,14 @@ pub const Image = enum(u64) {
     metrics,
     weather,
     requests,
+    audio,
 
     /// Runs with application permissions rather than as a service.
     pub fn application(self: Image) bool {
 
         return switch (self) {
 
-            .serial, .helper, .storage, .files, .accounts, .install, .display, .input, .usb, .net, .metrics => false,
+            .serial, .helper, .storage, .files, .accounts, .install, .display, .input, .usb, .net, .metrics, .audio => false,
             else => true,
 
         };

@@ -322,9 +322,12 @@ fn finish(area: ?gui.Rect) void {
     const path = if (area) |taken| save(taken) catch |err| failed: {
 
         notices.post(.warning, "Could not save the screenshot", catalog.reason(err), null);
+        api.audio.cue(.alert);
         break :failed null;
 
     } else null;
+
+    if (path != null) api.audio.cue(.capture);
 
     window.hide();
     anchor = null;

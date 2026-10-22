@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const controls = @import("controls.zig");
 const desktop = @import("desktop.zig");
 
 const api = @import("api");
@@ -270,7 +271,7 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         if (gui.wait(all[0 .. surfaces.len + 1], desktop.patience(50))) |input| {
 
-            if (!desktop.react(input)) react(input.event);
+            if (!controls.press(input.event) and !desktop.react(input)) react(input.event);
 
         }
 
@@ -445,6 +446,7 @@ fn submit(_: *gui.Node) void {
 
         if (state == .setup) load();
         password.invalid = true;
+        api.audio.cue(.alert);
 
         return;
 
@@ -465,7 +467,13 @@ fn submit(_: *gui.Node) void {
     }
 
     // Unlocking returns to the same desktop; signing in starts it.
-    if (state != .locked) desktop.start(names[selected][0..lengths[selected]]);
+    if (state != .locked) {
+
+        desktop.start(names[selected][0..lengths[selected]]);
+        api.audio.cue(.login);
+
+    }
+
     state = .session;
 
 }

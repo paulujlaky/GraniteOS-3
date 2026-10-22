@@ -70,6 +70,7 @@ pub const Operation = enum(u8) {
     enable,
     locate,
     scale,
+    chime,
     _,
 
 };

@@ -38,6 +38,7 @@ pub const sketch = @import("sketch.zig");
 pub const Sketch = sketch.Sketch;
 pub const Figure = sketch.Figure;
 pub const Dialog = @import("dialog.zig").Dialog;
+pub const Slider = @import("slider.zig").Slider;
 pub const menu = @import("menu.zig");
 pub const Menu = menu.Menu;
 pub const Choice = menu.Choice;

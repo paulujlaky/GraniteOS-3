@@ -17,6 +17,7 @@ pub const time = @import("time.zig");
 pub const net = @import("net.zig");
 pub const http = @import("http.zig");
 pub const metrics = @import("metrics.zig");
+pub const audio = @import("audio.zig");
 pub const Date = time.Date;
 pub const Request = abi.Request;
 pub const ApiError = error{ Denied, Invalid, Missing, Deadlock, Exhausted, Timeout, Busy };

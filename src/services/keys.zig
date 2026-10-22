@@ -39,6 +39,9 @@ pub const Keyboard = struct {
 
             0x1c => .enter,
             0x1d => .control,
+            0x20 => .mute,
+            0x2e => .volume_down,
+            0x30 => .volume_up,
             0x35 => .character,
             0x38 => .alt,
             0x47 => .home,

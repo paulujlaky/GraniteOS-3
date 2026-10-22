@@ -1894,14 +1894,15 @@ fn route(event: api.Event, source: u64) void {
 
             };
 
-            // Super chords, and Alt+Tab with the Alt release that ends it, are the desktop's, whichever window has the keyboard.
+            // Super chords, Alt+Tab with the Alt release that ends it, and the volume keys are the desktop's, whichever window has the
+            // keyboard.
             const cycling = event.modifiers.alt and event.key() == .tab;
             const ending = switching and event.key() == .alt and !event.pressed;
 
             if (cycling) switching = true;
             if (ending) switching = false;
 
-            if ((event.modifiers.super or cycling or ending) and owner != 0 and (target == null or surfaces[target.?].client != owner)) {
+            if ((event.modifiers.super or cycling or ending or event.key().global()) and owner != 0 and (target == null or surfaces[target.?].client != owner)) {
 
                 for (stack[0..depth]) |index| {
 

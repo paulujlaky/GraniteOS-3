@@ -40,6 +40,25 @@ test "font rasterizes every printable ASCII glyph with solid stems and open coun
 
 }
 
+test "every named icon has a distinct glyph in the icon font that renders" {
+
+    const face = font.face(.icons);
+    var seen = std.AutoHashMap(u16, void).init(std.testing.allocator);
+
+    defer seen.deinit();
+
+    for (std.enums.values(font.Icon)) |icon| {
+
+        const glyph = face.lookup(@intFromEnum(icon));
+
+        try std.testing.expect(glyph != 0);
+        try std.testing.expect(face.render(glyph, 24 / face.units, 0) != null);
+        try std.testing.expect(!(try seen.getOrPut(glyph)).found_existing);
+
+    }
+
+}
+
 test "font kerns letter pairs from its table and measures with them" {
 
     const face = font.sans();

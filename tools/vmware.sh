@@ -206,7 +206,11 @@ ethernet0.connectionType = "nat"
 ethernet0.addressType = "generated"
 ethernet0.startConnected = "TRUE"
 $controllers
-sound.present = "FALSE"
+sound.present = "TRUE"
+sound.virtualDev = "hdaudio"
+sound.fileName = "-1"
+sound.autodetect = "TRUE"
+sound.startConnected = "TRUE"
 msg.autoAnswer = "TRUE"
 uuid.action = "create"
 EOF
@@ -255,6 +259,7 @@ services: supervisor recovered; children adopted
 services: recovery and application APIs passed
 storage: ready
 input: ready
+audio: VMware HD Audio ready
 display: ready'
 failure=': error: |Exception Type|services: acceptance failed'
 

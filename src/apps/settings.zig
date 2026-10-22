@@ -1,4 +1,4 @@
-//! Settings: the display mode, the wallpaper and Quartz, the network, and accounts.
+//! Settings: the display mode, the wallpaper and Quartz, the network, sound, and accounts.
 
 const std = @import("std");
 
@@ -17,6 +17,7 @@ const Section = enum {
     display,
     appearance,
     network,
+    sound,
     accounts,
 
 };
@@ -79,6 +80,7 @@ const sections = [_]struct { title: []const u8, icon: gui.Icon }{
     .{ .title = "Display", .icon = .monitor },
     .{ .title = "Appearance", .icon = .palette },
     .{ .title = "Network", .icon = .globe },
+    .{ .title = "Sound", .icon = .volume_high },
     .{ .title = "Accounts", .icon = .users },
 
 };
@@ -114,6 +116,28 @@ const card = gui.Style{
     .radius = theme.corner,
 
 };
+
+/// The card atop a page about a device, such as the network adapter: its round badge, then what it is and how it is.
+const hero = card.with(.{
+
+    .padding = gui.Edges.all(20),
+    .direction = .row,
+    .gap = 16,
+    .items = .center,
+
+});
+
+const badge = theme.icon.with(.{
+
+    .width = 44,
+    .height = 44,
+
+    .background = theme.field,
+    .radius = 22,
+
+    .size = 20,
+
+});
 
 /// A setting's card: an icon, its name, and its control at the right.
 const line = card.with(.{
@@ -605,17 +629,7 @@ var appearance_page = gui.box(page, &appearance_parts);
 // Network.
 var network_title = gui.label("Network", heading);
 
-var link_icon = gui.icon(.globe, theme.icon.with(.{
-
-    .width = 44,
-    .height = 44,
-
-    .background = theme.field,
-    .radius = 22,
-
-    .size = 20,
-
-}));
+var link_icon = gui.icon(.globe, badge);
 
 var link_name = gui.label("Ethernet", .{
 
@@ -658,14 +672,7 @@ var address_box = gui.box(.{
 
 var link_parts = [_]*gui.Node{ &link_icon, &link_words, &address_box };
 
-var link_hero = gui.box(card.with(.{
-
-    .padding = gui.Edges.all(20),
-    .direction = .row,
-    .gap = 16,
-    .items = .center,
-
-}), &link_parts);
+var link_hero = gui.box(hero, &link_parts);
 
 var automatic = gui.label("Automatic", segment);
 var manual = gui.label("Manual", segment);
@@ -723,6 +730,64 @@ var network_group = gui.box(group, &network_rows);
 var network_status = quiet();
 var network_parts = [_]*gui.Node{ &network_title, &link_hero, &network_group, &network_status };
 var network_page = gui.box(page, &network_parts);
+
+// Sound.
+var sound_title = gui.label("Sound", heading);
+var output_icon = gui.icon(.headphones, badge);
+var output_chip: [32]u8 = undefined;
+
+var output_name = gui.label("", .{
+
+    .size = 18,
+
+});
+
+var output_bytes: [64]u8 = undefined;
+var output_state = gui.label("", theme.caption);
+var output_words_parts = [_]*gui.Node{ &output_name, &output_state };
+
+var output_words = gui.box(.{
+
+    .grow = 1,
+    .gap = 2,
+
+}, &output_words_parts);
+
+var output_parts = [_]*gui.Node{ &output_icon, &output_words };
+var output_hero = gui.box(hero, &output_parts);
+
+var loudness = gui.Slider{ .changed = &slideVolume };
+var loudness_node: gui.Node = undefined;
+var loudness_bytes: [8]u8 = undefined;
+
+var loudness_value = gui.label("", .{
+
+    .width = 44,
+    .text_align = .right,
+
+});
+
+var loudness_parts = [_]*gui.Node{ &loudness_node, &loudness_value };
+
+var loudness_control = gui.box(.{
+
+    .width = 260,
+    .direction = .row,
+    .gap = theme.spacing,
+    .items = .center,
+
+}, &loudness_parts);
+
+var loudness_row = Row{};
+var mute = Switch{};
+var mute_row = Row{};
+var chimes = Switch{};
+var chimes_row = Row{};
+var sound_rows = [_]*gui.Node{ &loudness_row.node, &mute_row.node, &chimes_row.node };
+var sound_group = gui.box(group, &sound_rows);
+var sound_status = quiet();
+var sound_parts = [_]*gui.Node{ &sound_title, &output_hero, &sound_group, &sound_status };
+var sound_page = gui.box(page, &sound_parts);
 
 // Accounts.
 var accounts_title = gui.label("Accounts", heading);
@@ -846,7 +911,7 @@ var accounts_status = quiet();
 var accounts_parts = [_]*gui.Node{ &accounts_title, &accounts_body, &accounts_status };
 var accounts_page = gui.box(page, &accounts_parts);
 
-var pages = [_]*gui.Node{ &display_page, &appearance_page, &network_page, &accounts_page };
+var pages = [_]*gui.Node{ &display_page, &appearance_page, &network_page, &sound_page, &accounts_page };
 
 var content = gui.box(.{
 
@@ -890,6 +955,7 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
     buildDisplay();
     buildAppearance();
     buildNetwork();
+    buildSound();
     buildAccounts();
 
     window = gui.Window.open(&root, .{
@@ -911,10 +977,11 @@ pub export fn app_main(parent: usize, _: usize, environment: *const api.abi.Envi
 
     while (true) {
 
-        // The Network page keeps up with the link while it shows.
+        // The Network and Sound pages keep up with the link and the volume keys while they show.
         const event = window.next(500) orelse {
 
             if (!network_page.hidden) describeNetwork(false);
+            if (!sound_page.hidden) describeSound();
             continue;
 
         };
@@ -1022,6 +1089,28 @@ fn buildNetwork() void {
 
 }
 
+fn buildSound() void {
+
+    loudness_node = loudness.node(.{
+
+        .grow = 1,
+
+    });
+
+    loudness_row.init(.volume_high, "Volume", &loudness_control);
+
+    mute.init();
+    mute_row.init(.mute, "Mute", &mute.node);
+    mute_row.node.style.hover.background = theme.hover;
+    mute_row.node.action = &toggleMute;
+
+    chimes.init();
+    chimes_row.init(.bell, "System sounds", &chimes.node);
+    chimes_row.node.style.hover.background = theme.hover;
+    chimes_row.node.action = &toggleChimes;
+
+}
+
 fn buildAccounts() void {
 
     for (0..8) |index| {
@@ -1080,6 +1169,7 @@ fn show(section: Section) void {
         .display => describeDisplay(""),
         .appearance => describeAppearance(),
         .network => describeNetwork(true),
+        .sound => describeSound(),
         .accounts => loadAccounts(),
 
     }
@@ -1087,6 +1177,73 @@ fn show(section: Section) void {
     content.offset = 0;
     dialog.close();
     window.refresh();
+
+}
+
+/// Shows the output device and the volume, or that there is no audio device.
+fn describeSound() void {
+
+    const state = api.audio.status() catch {
+
+        output_name.content.label = "No audio device";
+        output_state.content.label = "Sound plays once an HD Audio controller is found.";
+        sound_group.hidden = true;
+        window.refresh();
+
+        return;
+
+    };
+
+    output_name.content.label = state.chip(&output_chip);
+    output_state.content.label = std.fmt.bufPrint(&output_bytes, "{s}, {d} output{s}", .{
+
+        state.adapter(),
+        state.outputs,
+        if (state.outputs == 1) "" else "s",
+
+    }) catch "";
+
+    sound_group.hidden = false;
+    loudness.value = @as(f32, @floatFromInt(state.volume)) / 100;
+    loudness_value.content.label = std.fmt.bufPrint(&loudness_bytes, "{d}%", .{state.volume}) catch "";
+    mute.set(state.muted);
+    chimes.set(state.sounds);
+    window.refresh();
+
+}
+
+fn unheard() void {
+
+    tell(&sound_status, "The audio service is unavailable.");
+
+}
+
+fn slideVolume(slider: *gui.Slider, done: bool) void {
+
+    api.audio.volume(@intFromFloat(@round(slider.value * 100))) catch return unheard();
+
+    if (done) api.audio.cue(.level);
+    describeSound();
+
+}
+
+fn toggleMute(_: *gui.Node) void {
+
+    const state = api.audio.status() catch return unheard();
+
+    api.audio.mute(!state.muted) catch return unheard();
+    describeSound();
+
+}
+
+/// Turns the system's short sounds on or off, playing one as they come on.
+fn toggleChimes(_: *gui.Node) void {
+
+    const state = api.audio.status() catch return unheard();
+
+    api.audio.sounds(!state.sounds) catch return unheard();
+    if (!state.sounds) api.audio.cue(.notice);
+    describeSound();
 
 }
 

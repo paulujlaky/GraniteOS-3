@@ -119,6 +119,21 @@ pub const Key = enum(u8) {
     f10,
     f11,
     f12,
+    mute,
+    volume_down,
+    volume_up,
     _,
+
+    /// Keys the desktop takes whichever window has the keyboard, such as the volume.
+    pub fn global(self: Key) bool {
+
+        return switch (self) {
+
+            .mute, .volume_down, .volume_up => true,
+            else => false,
+
+        };
+
+    }
 
 };

@@ -13,6 +13,9 @@ pub const Match = union(enum) {
     /// Class, subclass, and programming interface.
     class: u24,
 
+    /// Class and subclass, whatever the programming interface.
+    family: u16,
+
     /// Vendor in the low half, device in the high half.
     id: u32,
 
@@ -39,6 +42,7 @@ pub fn find(match: Match) ?u32 {
                 const found = switch (match) {
 
                     .class => |code| read(at, 8) >> 8 == code,
+                    .family => |code| read(at, 8) >> 16 == code,
                     .id => |wanted| read(at, 0) == wanted,
 
                 };
@@ -140,6 +144,13 @@ pub fn msi(at: u32, destination: u64, data: u16) bool {
 pub fn id(at: u32) u32 {
 
     return read(at, 0);
+
+}
+
+/// Clears the `clear` bits of function `at`'s configuration register at `offset`, then sets the `set` bits.
+pub fn modify(at: u32, offset: u8, clear: u32, set: u32) void {
+
+    write(at, offset, read(at, offset) & ~clear | set);
 
 }
 
