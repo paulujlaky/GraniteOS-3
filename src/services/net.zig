@@ -262,8 +262,12 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
     stamp_start = stamp();
     tick_start = api.ticks();
+
+    const signals = api.greet(handle);
+
     load();
     link();
+    if (signals & signal != 0) arrive();
 
     while (true) {
 

@@ -516,6 +516,33 @@ fn entropy() u64 {
 
 }
 
+/// Services only: answers requests with `handle` until the supervisor's hello, which must come before calling any other service,
+/// such as for settings, as the supervisor cannot find one for us while it waits on us. Returns the signals that arrived meanwhile.
+pub fn greet(comptime handle: fn (Request) ?u64) u64 {
+
+    var signals: u64 = 0;
+
+    while (true) {
+
+        const request = receive(true) catch continue;
+
+        if (request.first == 0) {
+
+            signals |= request.second;
+            continue;
+
+        }
+
+        if (handle(request)) |result| reply(request, result) catch {
+
+        };
+
+        if (protocol.operation(request.second) == .hello) return signals;
+
+    }
+
+}
+
 pub fn lookup(supervisor: u64, image: abi.Image) ApiError!u64 {
 
     const id = try call(supervisor, protocol.pack(.lookup, @intCast(@intFromEnum(image))));

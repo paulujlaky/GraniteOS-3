@@ -142,7 +142,9 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
     chip.start(controller.link(address), tag, format);
     report();
-    greet();
+
+    // The stream has not started, so no interrupt arriving meanwhile needs an answer.
+    _ = api.greet(handle);
     load();
 
     while (true) {
@@ -207,21 +209,6 @@ fn choose() void {
 
         address = candidate;
         _ = chip.probe(controller.link(candidate));
-
-    }
-
-}
-
-/// Answers requests until the supervisor's hello, as it cannot find the files service for the settings while it waits on us.
-fn greet() void {
-
-    while (true) {
-
-        const request = api.receive(true) catch continue;
-        if (request.first == 0) continue;
-
-        if (handle(request)) |result| answer(request, result);
-        if (protocol.operation(request.second) == .hello) return;
 
     }
 
