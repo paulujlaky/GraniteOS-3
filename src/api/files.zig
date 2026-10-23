@@ -78,12 +78,7 @@ pub const Files = struct {
 
             data.ensureUnusedCapacity(allocator, chunk + path.len + 1) catch return error.Exhausted;
 
-            const window = data.unusedCapacitySlice()[0 .. chunk + path.len + 1];
-
-            @memcpy(window[0..path.len], path);
-            window[path.len] = 0;
-
-            const count = try api.query(&self.endpoint, .files, protocol.pack(.read, @intCast(data.items.len)), window);
+            const count = try self.fetch(path, @intCast(data.items.len), data.unusedCapacitySlice()[0 .. chunk + path.len + 1]);
 
             if (count == 0) break;
             data.items.len += count;
@@ -91,6 +86,19 @@ pub const Files = struct {
         }
 
         return data.toOwnedSlice(allocator) catch error.Exhausted;
+
+    }
+
+    /// Reads up to `buffer.len` bytes at `offset` straight into `buffer`, which carries the path there and so must be longer
+    /// than it; returns how many, zero at the end.
+    pub fn fetch(self: *Files, path: []const u8, offset: u56, buffer: []u8) FileError!usize {
+
+        if (buffer.len <= path.len or std.mem.indexOfScalar(u8, path, 0) != null) return error.Invalid;
+
+        @memcpy(buffer[0..path.len], path);
+        buffer[path.len] = 0;
+
+        return api.query(&self.endpoint, .files, protocol.pack(.read, offset), buffer);
 
     }
 
@@ -169,6 +177,32 @@ pub const Files = struct {
         }
 
         return @min(count, out.len);
+
+    }
+
+    /// The entry for `path`, found by listing its folder; its name lives in the window until the next call.
+    pub fn find(self: *Files, path: []const u8) FileError!Entry {
+
+        const folder = std.fs.path.dirnamePosix(path) orelse return error.Invalid;
+        const name = std.fs.path.basenamePosix(path);
+        var listed: [32]Entry = undefined;
+        var index: u56 = 0;
+
+        while (true) {
+
+            const count = try self.list(folder, index, &listed);
+
+            if (count == 0) return error.Missing;
+
+            for (listed[0..count]) |entry| {
+
+                if (std.mem.eql(u8, entry.name, name)) return entry;
+
+            }
+
+            index += @intCast(count);
+
+        }
 
     }
 

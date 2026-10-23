@@ -4,6 +4,7 @@ const std = @import("std");
 
 const api = @import("api");
 const gui = @import("gui");
+const media = @import("media");
 
 const Image = api.abi.Image;
 
@@ -69,6 +70,7 @@ pub const apps = [_]App{
     .{ .image = .editor, .category = .productivity, .title = "Editor", .icon = .edit, .summary = "Write text and code" },
     .{ .image = .terminal, .category = .system, .title = "Terminal", .icon = .terminal, .summary = "Run OBSIDIAN shell commands" },
     .{ .image = .viewer, .category = .creative, .title = "Viewer", .icon = .image, .summary = "Look at pictures" },
+    .{ .image = .player, .category = .creative, .title = "Player", .icon = .music, .summary = "Play music and videos" },
     .{ .image = .drawing, .category = .creative, .title = "Drawing", .icon = .brush, .summary = "Sketch and paint pictures" },
     .{ .image = .calculator, .category = .productivity, .title = "Calculator", .icon = .calculator, .summary = "Work out sums" },
     .{ .image = .clock, .category = .productivity, .title = "Clock", .icon = .clock, .summary = "World time, stopwatch, and timer" },
@@ -201,7 +203,9 @@ pub fn find(image: Image) ?*const App {
 /// The app that opens a file named `name`.
 pub fn opener(name: []const u8) Image {
 
-    return if (picture(name)) .viewer else .editor;
+    if (picture(name)) return .viewer;
+
+    return if (media.Kind.named(name) != null) .player else .editor;
 
 }
 
@@ -217,6 +221,7 @@ pub fn symbol(name: []const u8, directory: bool) gui.Icon {
 
     if (directory) return .folder;
     if (picture(name)) return .image;
+    if (media.Kind.named(name)) |kind| return if (kind.moving()) .file_video else .file_audio;
 
     for ([_][]const u8{ ".zig", ".c", ".h", ".py", ".sh", ".json", ".js", ".rs", ".go" }) |extension| {
 

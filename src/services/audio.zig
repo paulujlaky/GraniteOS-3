@@ -151,8 +151,9 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
 
         const now = api.ticks();
 
-        // Without interrupts, the device is polled every tick while it plays.
-        const limit = if (running and signal == 0) 1 else @max(soonest(now) -| now, 1);
+        // Without interrupts, the device is polled every tick while it plays; stopped, a stream that may write again is
+        // watched closely, since writing and resuming ask nothing of the service.
+        const limit = if (running and signal == 0) 1 else if (!running and listening()) 2 else @max(soonest(now) -| now, 1);
 
         const request = api.within(@min(limit, 100)) catch {
 
@@ -444,6 +445,8 @@ fn maintain() void {
 
     }
 
+    if (!running and !quiet()) wake();
+
 }
 
 /// The tick by which `maintain` next has work.
@@ -481,6 +484,19 @@ fn quiet() bool {
     }
 
     return true;
+
+}
+
+/// A stream is open and not paused, so it may write frames at any moment.
+fn listening() bool {
+
+    for (streams) |stream| {
+
+        if (stream.owner != 0 and !stream.header.paused) return true;
+
+    }
+
+    return false;
 
 }
 
