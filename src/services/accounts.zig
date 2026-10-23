@@ -54,6 +54,27 @@ var files = api.Files{
 
 var input: [512]u8 = undefined;
 
+/// The music and film every new home starts with, so the Player has something to show: a folder, a name, and the bytes.
+const samples = [_]struct { []const u8, []const u8, []const u8 }{
+
+    .{ "Music", "In the Hall of the Mountain King.mp3", @embedFile("samples/mountain.mp3") },
+    .{ "Music", "The Great Gate of Kiev.flac", @embedFile("samples/kiev.flac") },
+    .{ "Videos", "El Capitan.mpg", @embedFile("samples/capitan.mpg") },
+    .{ "Videos", "Credits.txt", @embedFile("samples/Credits.txt") },
+
+};
+
+/// A home the last request made, furnished once its caller has the answer, as writing the samples takes a moment.
+var fresh: ?Fresh = null;
+
+const Fresh = struct {
+
+    user: u32,
+    bytes: [6 + name_limit]u8,
+    length: usize,
+
+};
+
 pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environment) callconv(.c) noreturn {
 
     api.start(environment, .service);
@@ -68,6 +89,17 @@ pub export fn app_main(_: usize, _: usize, environment: *const api.abi.Environme
         };
 
         std.crypto.secureZero(u8, &input);
+
+        if (fresh) |home| {
+
+            // Samples are a welcome, not part of the account, so failing to write them leaves it as it is.
+            furnish(home.bytes[0..home.length], home.user) catch {
+
+            };
+
+            fresh = null;
+
+        }
 
     }
 
@@ -259,7 +291,42 @@ fn create(caller: api.abi.Identity, name: []const u8, password: []const u8, priv
 
     });
 
+    fresh = .{
+
+        .user = next,
+        .bytes = home,
+        .length = path.len,
+
+    };
+
     return next;
+
+}
+
+/// Room for the window a save lends the files service, as this service may not allocate memory.
+var window: [256 * 1024 + 128]u8 = undefined;
+
+/// Writes the samples into folders of `home`, all owned by `user`.
+fn furnish(home: []const u8, user: u32) !void {
+
+    var bytes: [6 + name_limit + 64]u8 = undefined;
+
+    for (samples) |sample| {
+
+        const folder, const name, const content = sample;
+        const directory = try std.fmt.bufPrint(&bytes, "{s}/{s}", .{ home, folder });
+
+        files.directory(directory) catch |err| if (err != error.Exists) return err;
+        try files.change(directory, 0o755, user);
+
+        const path = try std.fmt.bufPrint(&bytes, "{s}/{s}/{s}", .{ home, folder, name });
+
+        var fixed = std.heap.FixedBufferAllocator.init(&window);
+
+        try files.save(fixed.allocator(), path, content);
+        try files.change(path, 0o644, user);
+
+    }
 
 }
 
