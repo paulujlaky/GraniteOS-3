@@ -54,6 +54,9 @@ pub const Track = struct {
 
     },
 
+    /// Shift was held as the button went down, as when extending a selection.
+    shift: bool = false,
+
 };
 
 /// A press that turns into a drag once the pointer strays a few pixels from where it went down, so a slightly shaky click stays a click.
@@ -136,11 +139,21 @@ pub const Node = struct {
     /// a chart's readout.
     hover: ?*const fn (*Node, ?Point) void = null,
 
+    /// Scrolls content the node draws itself by `delta` pixels of wheel; false when it was already as far as it goes.
+    scroll: ?*const fn (*Node, i32) bool = null,
+
     /// What the pointer shows over the node, when not what `pointer` picks.
     cursor: ?Cursor = null,
 
     /// Free for the app, such as an index into its own data.
     data: usize = 0,
+
+    /// Takes every key while focused, Tab and Enter included, and focuses on a press: an editor the app draws itself, whose
+    /// keys the window passes on unhandled.
+    typing: bool = false,
+
+    /// Whether the node had the keys as it last painted; for nodes that draw themselves.
+    focused: bool = false,
 
     hidden: bool = false,
     selected: bool = false,
@@ -157,7 +170,7 @@ pub const Node = struct {
 
     pub fn focusable(self: *const Node) bool {
 
-        return self.shown() and (self.action != null or self.open != null or self.editable());
+        return self.shown() and (self.action != null or self.open != null or self.typing or self.editable());
 
     }
 
@@ -464,7 +477,12 @@ pub const Node = struct {
             .input => |edit| self.line(edit, target, inner_area, color, marks.focus == self),
             .area => |edit| self.lines(edit, target, inner_area, color, marks.focus == self),
             .image => |picture| target.image(picture.handle, picture.place(inner_area)),
-            .custom => |record| record(self, target),
+            .custom => |record| {
+
+                self.focused = marks.focus == self;
+                record(self, target);
+
+            },
 
         }
 
@@ -558,7 +576,13 @@ pub const Node = struct {
                 return self;
 
             },
-            else => return null,
+            else => {
+
+                const roll = self.scroll orelse return null;
+
+                return if (roll(self, delta)) self else null;
+
+            },
 
         }
 

@@ -58,7 +58,7 @@
 - [x] TCP/IP, automatic configuration, DNS, and HTTP/HTTPS transfers.
 - [x] Network apps: Weather (with a quick settings card) and Requests, over a shared location service.
 - [x] Audio output on supported physical and virtual hardware (VMware HD Audio; the desktop's Realtek codec awaits physical validation).
-- [ ] Document and code editing.
+- [x] Document and code editing (Markdown with a live preview; code with highlighting, find/replace, undo, and tabs).
 - [ ] Audio/video playback.
 
 ## Milestone 7: Initial Release

@@ -385,7 +385,7 @@ pub const Window = struct {
 
                 self.pointer = at;
 
-                if (self.tracking) |held| follow(held, at, .move);
+                if (self.tracking) |held| follow(held, at, .move, false);
 
                 if (self.selecting) if (self.focused) |field| {
 
@@ -499,8 +499,9 @@ pub const Window = struct {
 
             if (new.track != null) {
 
+                if (new.typing) self.focus(new);
                 self.tracking = new;
-                follow(new, at, .down);
+                follow(new, at, .down, event.modifiers.shift);
 
                 // Something that can be dragged may still open on a double-click, such as a file.
                 if (repeated) if (new.open) |handler| handler(new);
@@ -533,7 +534,7 @@ pub const Window = struct {
         if (self.tracking) |held| {
 
             self.tracking = null;
-            follow(held, at, .up);
+            follow(held, at, .up, false);
 
         }
 
@@ -573,6 +574,9 @@ pub const Window = struct {
             return true;
 
         };
+
+        // An editor the app draws takes every key, so the app sees them unhandled.
+        if (target) |held| if (held.typing) return false;
 
         if (event.key() == .tab and !event.modifiers.control and !event.modifiers.alt and !typing) {
 
@@ -764,12 +768,13 @@ fn activate(target: *Node) void {
 
 }
 
-fn follow(target: *Node, at: Point, phase: @FieldType(node.Track, "phase")) void {
+fn follow(target: *Node, at: Point, phase: @FieldType(node.Track, "phase"), shift: bool) void {
 
     target.track.?(target, .{
 
         .at = at,
         .phase = phase,
+        .shift = shift,
 
     });
 

@@ -23,6 +23,25 @@ pub const faint = 0x5a5a5a;
 pub const accent = 0xeeeeee;
 pub const danger = 0xe5534b;
 
+/// Code and Markdown colours, the one place the look strays from grey: soft hues about as light as the text, so highlighting
+/// reads without shouting.
+pub const syntax = struct {
+
+    pub const keyword = 0xc6a0f6;
+    pub const types = 0x8bd5ca;
+    pub const number = 0xf5a97f;
+    pub const string = 0xa6da95;
+    pub const comment = 0x787878;
+    pub const function = 0x8aadf4;
+    pub const builtin = 0xeed49f;
+    pub const punctuation = 0xa8a8a8;
+
+    /// Behind matches of a search, and around the bracket matching the one at the caret.
+    pub const found = 0x4d4122;
+    pub const bracket = 0x6a6a6a;
+
+};
+
 /// Graphite tints three quarters opaque over Quartz, which softens what lies behind bars, docks, menus, windows, and tags; the top byte
 /// is transparency, as `canvas.shade` makes it. With Quartz switched off they draw solid, as `background` and `raised`.
 pub const quartz = 0x40141414;

@@ -184,7 +184,7 @@ pub const Text = struct {
 
                 const end = self.caret;
 
-                self.caret = if (jump) self.boundary(self.caret, -1) else self.before(self.caret);
+                self.caret = if (jump) boundary(self.text(), self.caret, -1) else before(self.text(), self.caret);
                 self.remove(end - self.caret);
 
             },
@@ -192,7 +192,7 @@ pub const Text = struct {
 
                 if (self.erase()) return true;
                 if (self.caret == self.length) return false;
-                self.remove((if (jump) self.boundary(self.caret, 1) else self.after(self.caret)) - self.caret);
+                self.remove((if (jump) boundary(self.text(), self.caret, 1) else after(self.text(), self.caret)) - self.caret);
 
             },
             .left, .right, .home, .end => {
@@ -211,8 +211,8 @@ pub const Text = struct {
 
                 const target = switch (event.key()) {
 
-                    .left => if (self.caret == 0) 0 else if (jump) self.boundary(self.caret, -1) else self.before(self.caret),
-                    .right => if (self.caret == self.length) self.length else if (jump) self.boundary(self.caret, 1) else self.after(self.caret),
+                    .left => if (self.caret == 0) 0 else if (jump) boundary(self.text(), self.caret, -1) else before(self.text(), self.caret),
+                    .right => if (self.caret == self.length) self.length else if (jump) boundary(self.text(), self.caret, 1) else after(self.text(), self.caret),
                     .home => if (multiline and !jump) self.start(self.caret) else 0,
                     else => if (multiline and !jump) std.mem.indexOfScalarPos(u8, self.text(), self.caret, '\n') orelse self.length else self.length,
 
@@ -334,49 +334,6 @@ pub const Text = struct {
 
     }
 
-    /// Where the word before (`direction` -1) or after (1) `at` begins or ends.
-    fn boundary(self: *const Text, at: usize, direction: i8) usize {
-
-        const string = self.text();
-        var index = at;
-
-        if (direction < 0) {
-
-            while (index > 0 and !wordy(string[index - 1])) index -= 1;
-            while (index > 0 and wordy(string[index - 1])) index -= 1;
-
-        } else {
-
-            while (index < string.len and !wordy(string[index])) index += 1;
-            while (index < string.len and wordy(string[index])) index += 1;
-
-        }
-
-        return index;
-
-    }
-
-    /// Where the character before `at` starts.
-    fn before(self: *const Text, at: usize) usize {
-
-        var index = at - 1;
-
-        while (index > 0 and inner(self.buffer[index])) index -= 1;
-
-        return index;
-
-    }
-
-    /// Where the character after `at` starts.
-    fn after(self: *const Text, at: usize) usize {
-
-        var index = at + 1;
-
-        while (index < self.length and inner(self.buffer[index])) index += 1;
-
-        return index;
-
-    }
 
     fn start(self: *const Text, from: usize) usize {
 
@@ -537,9 +494,52 @@ fn nearest(face: *const font.Font, scale: f32, string: []const u8, line: Line, x
 }
 
 /// Whether `byte` belongs to a word: letters, digits, underscores, and any non-ASCII character.
-fn wordy(byte: u8) bool {
+pub fn wordy(byte: u8) bool {
 
     return std.ascii.isAlphanumeric(byte) or byte == '_' or byte >= 0x80;
+
+}
+
+/// Where the word before (`direction` -1) or after (1) `at` in `string` begins or ends.
+pub fn boundary(string: []const u8, at: usize, direction: i8) usize {
+
+    var index = at;
+
+    if (direction < 0) {
+
+        while (index > 0 and !wordy(string[index - 1])) index -= 1;
+        while (index > 0 and wordy(string[index - 1])) index -= 1;
+
+    } else {
+
+        while (index < string.len and !wordy(string[index])) index += 1;
+        while (index < string.len and wordy(string[index])) index += 1;
+
+    }
+
+    return index;
+
+}
+
+/// Where the character before `at`, which is past the start of `string`, starts.
+pub fn before(string: []const u8, at: usize) usize {
+
+    var index = at - 1;
+
+    while (index > 0 and inner(string[index])) index -= 1;
+
+    return index;
+
+}
+
+/// Where the character after `at`, which is before the end of `string`, starts.
+pub fn after(string: []const u8, at: usize) usize {
+
+    var index = at + 1;
+
+    while (index < string.len and inner(string[index])) index += 1;
+
+    return index;
 
 }
 

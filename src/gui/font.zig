@@ -55,6 +55,11 @@ pub const Face = enum(u8) {
     /// Lucide's line icons, subset to those `Icon` names.
     icons,
 
+    /// Nimbus Sans thickened, slanted, or both as it renders, since no bold or italic cut is embedded.
+    bold,
+    italic,
+    bold_italic,
+
 };
 
 const files = [_][]const u8{
@@ -65,13 +70,24 @@ const files = [_][]const u8{
 
 };
 
-var embedded = [_]?Font{null} ** files.len;
+var embedded = [_]?Font{null} ** std.enums.values(Face).len;
 
 pub fn face(which: Face) *const Font {
 
     const slot = &embedded[@intFromEnum(which)];
 
-    if (slot.* == null) slot.* = Font.init(files[@intFromEnum(which)]) catch unreachable;
+    if (slot.* == null) {
+
+        const file: usize = if (@intFromEnum(which) < files.len) @intFromEnum(which) else 0;
+        var font = Font.init(files[file]) catch unreachable;
+
+        // Twelve degrees leans as Helvetica Oblique does, and a thirtieth of an em thickens stems about as much as a bold cut.
+        if (which == .italic or which == .bold_italic) font.slant = 0.21;
+        if (which == .bold or which == .bold_italic) font.weight = 0.035;
+
+        slot.* = font;
+
+    }
 
     return &slot.*.?;
 
@@ -254,6 +270,12 @@ pub const Font = struct {
     /// Kerning pairs sorted by glyph pair: left, right, then the adjustment, all big-endian.
     pairs: []const [6]u8 = &.{},
 
+    /// How far outlines lean right per unit of height, for synthetic italics.
+    slant: f32 = 0,
+
+    /// How many ems strokes thicken by, rightwards, for synthetic bold; advances widen to match.
+    weight: f32 = 0,
+
     pub fn init(bytes: []const u8) FontError!Font {
 
         if (bytes.len < 12) return error.UnsupportedFont;
@@ -351,7 +373,7 @@ pub const Font = struct {
     /// Horizontal advance in font units.
     pub fn advance(self: *const Font, glyph: u16) f32 {
 
-        return @floatFromInt(read(u16, self.bytes, self.hmtx + @as(usize, @min(glyph, self.metrics - 1)) * 4));
+        return @as(f32, @floatFromInt(read(u16, self.bytes, self.hmtx + @as(usize, @min(glyph, self.metrics - 1)) * 4))) + self.weight * self.units;
 
     }
 
@@ -392,11 +414,21 @@ pub const Font = struct {
 
         if (!self.load(glyph, 0, 0, 0, &shape) or shape.contours == 0) return null;
 
+        if (self.slant != 0) for (points[0..shape.points]) |*point| {
+
+            point.x += @intFromFloat(@round(@as(f32, @floatFromInt(point.y)) * self.slant));
+
+        };
+
+        const low: f32 = @floatFromInt(read(i16, data, 4));
+        const high: f32 = @floatFromInt(read(i16, data, 8));
+        const thicken = self.weight * self.units * scale;
+
         // A one-pixel margin keeps rounding from reaching outside the buffer.
-        const left = @floor(@as(f32, @floatFromInt(read(i16, data, 2))) * scale + shift) - 1;
-        const top = @floor(-@as(f32, @floatFromInt(read(i16, data, 8))) * scale) - 1;
-        const width: usize = @intFromFloat(@ceil(@as(f32, @floatFromInt(read(i16, data, 6))) * scale + shift) - left + 2);
-        const height: usize = @intFromFloat(@ceil(-@as(f32, @floatFromInt(read(i16, data, 4))) * scale) - top + 2);
+        const left = @floor((@as(f32, @floatFromInt(read(i16, data, 2))) + low * self.slant) * scale + shift) - 1;
+        const top = @floor(-high * scale) - 1;
+        const width: usize = @intFromFloat(@ceil((@as(f32, @floatFromInt(read(i16, data, 6))) + high * self.slant) * scale + shift + thicken) - left + 2);
+        const height: usize = @intFromFloat(@ceil(-low * scale) - top + 2);
 
         if (width * height + 2 > area.len) return null;
 
@@ -427,6 +459,8 @@ pub const Font = struct {
             cell.* = @min(@abs(sum), 1);
 
         }
+
+        if (thicken > 0) embolden(raster.area[0 .. width * height], width, thicken);
 
         return .{
 
@@ -816,6 +850,40 @@ fn read(comptime T: type, bytes: []const u8, offset: usize) T {
 fn order(key: u32, pair: [6]u8) std.math.Order {
 
     return std.math.order(key, read(u32, &pair, 0));
+
+}
+
+/// Smears each row of `coverage` rightwards by `amount` pixels, thickening every vertical stroke as a bold cut would.
+fn embolden(coverage: []f32, width: usize, amount: f32) void {
+
+    const whole: usize = @intFromFloat(@floor(amount));
+    const part = amount - @floor(amount);
+    var row: usize = 0;
+
+    while (row < coverage.len) : (row += width) {
+
+        const cells = coverage[row..][0..width];
+        var x = width;
+
+        // Right to left, so every cell still reads the unsmeared ones to its left.
+        while (x > 0) {
+
+            x -= 1;
+
+            var most = cells[x];
+
+            for (1..whole + 1) |back| {
+
+                if (back <= x) most = @max(most, cells[x - back]);
+
+            }
+
+            if (whole + 1 <= x) most = @max(most, cells[x - whole - 1] * part);
+            cells[x] = most;
+
+        }
+
+    }
 
 }
 
