@@ -1274,15 +1274,7 @@ fn describePreview() void {
     var arena = std.heap.ArenaAllocator.init(api.pages);
     defer arena.deinit();
 
-    var next = decode(arena.allocator(), path) catch blk: {
-
-        const width: u32 = 320;
-        var fresh = gui.Image.init(width, @intCast(@max(@divTrunc(320 * size.height, size.width), 1))) catch return;
-
-        granite.paint(&fresh, @as(f32, @floatFromInt(size.width)) / width);
-        break :blk fresh;
-
-    };
+    var next = decode(arena.allocator(), path) catch granite.preview(arena.allocator()) catch return;
 
     next.fit = .cover;
 

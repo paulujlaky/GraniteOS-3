@@ -64,6 +64,9 @@ var surfaces: [14]*gui.Window = undefined;
 /// The picture behind everything, shared with the lock screen.
 pub var backdrop: gui.Image = undefined;
 
+/// Whether the backdrop is granite rather than the user's picture.
+var plain = true;
+
 var painting = gui.picture(&backdrop, .{
 
     .grow = 1,
@@ -189,9 +192,11 @@ pub fn init() void {
 
     };
 
-    backdrop = gui.Image.init(@intCast(screen.width), @intCast(screen.height)) catch api.exit(3);
+    var scratch = std.heap.ArenaAllocator.init(api.pages);
+
+    backdrop = granite.load(scratch.allocator()) catch api.exit(3);
     backdrop.fit = .cover;
-    granite.paint(&backdrop, 1);
+    scratch.deinit();
 
     backdrop.publish() catch {
 
@@ -291,7 +296,7 @@ pub fn stop() void {
 
     };
 
-    if (backdrop.width != wallpaper.surface.list.width or backdrop.height != wallpaper.surface.list.height) replace(null);
+    replace(null);
 
 }
 
@@ -696,22 +701,17 @@ fn reload(what: catalog.Reload) void {
 
 }
 
-/// Swaps the backdrop for the PNG at `path`, or fresh granite when null or unreadable.
+/// Swaps the backdrop for the PNG at `path`, or granite when null or unreadable.
 fn replace(path: ?[]const u8) void {
 
     var arena = std.heap.ArenaAllocator.init(api.pages);
     defer arena.deinit();
 
-    const screen = wallpaper.surface.list.bounds();
+    const chosen = load(arena.allocator(), path orelse "") catch null;
 
-    var next = load(arena.allocator(), path orelse "") catch blk: {
+    if (chosen == null and plain) return;
 
-        var fresh = gui.Image.init(@intCast(screen.width), @intCast(screen.height)) catch return;
-
-        granite.paint(&fresh, 1);
-        break :blk fresh;
-
-    };
+    var next = chosen orelse granite.load(arena.allocator()) catch return;
 
     next.fit = .cover;
 
@@ -724,6 +724,7 @@ fn replace(path: ?[]const u8) void {
 
     backdrop.deinit();
     backdrop = next;
+    plain = chosen == null;
     wallpaper.refresh();
     session.redraw();
 

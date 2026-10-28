@@ -2,3 +2,4 @@ src/media/fixtures/** binary
 *.mp3 binary
 *.flac binary
 *.mpg binary
+*.png binary
